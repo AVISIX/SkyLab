@@ -48,9 +48,9 @@ if SERVER then
     addCSFolder(l"shared/*")
     SSLE ["SSLE:InternalConstructor"]:ReliableChannel ("Registered Clientside Files.")
 
-    local files, _ = file.Find("addons/skylab_editor/materials/skylab/*", "GAME")
+    local files, _ = file.Find("addons/SkyLab/materials/skylab/*", "GAME")
     for _, v in pairs(files) do 
-        resource.AddSingleFile("addons/skylab_editor/materials/skylab/"..v)
+        resource.AddSingleFile("addons/SkyLab/materials/skylab/"..v)
     end
     SSLE ["SSLE:InternalConstructor"]:ReliableChannel ("Registered Resource Files.")
 end
