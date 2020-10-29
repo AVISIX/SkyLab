@@ -275,7 +275,7 @@ function filebrowser:Init()
         self.lastFocus = status
     end
 
-    local tid = "search_textchanged_timer" .. skylab_filebrowser_search_timer_counter
+    local tid = "search_filebrowser_textchanged_timer" .. skylab_filebrowser_search_timer_counter
     local blockSearch = false 
     do   
         local super = self 
@@ -611,6 +611,7 @@ function filebrowser:Init()
     do 
         local lastDir = ""
         list.OnRowSelected = function( self, index, pnl )
+            if not pnl.root or not pnl.directory then return end 
             if lastDir ~= pnl.root..pnl.directory then 
                 parent.fileinfo:SetFile(pnl.root, pnl.directory)
                 lastDir = pnl.root..pnl.directory
@@ -705,10 +706,10 @@ function filebrowser:ReloadList(shouldQueue)
         local s = string.Split(v, ".")
         local directory = selectedDir .. v
 
-        local exec = function(line)
+        local function exec(line)
             if not line then return end 
             line.directory = directory 
-            line.root = self.tree.root  
+            line.root = self.tree.root or "DATA"
             line.filename = s[1] or "-"
             line.filetype = s[2] or "-"
             line.OnRightClick = function(self)
@@ -724,10 +725,10 @@ function filebrowser:ReloadList(shouldQueue)
                 end)			
                 menu:Open()
             end	
-        end
+        end 
 
         if shouldQueue == false then 
-            self.list:AddLine(s[1] or "-", "." .. (s[#s] or "-"), getFilesize(directory, self.tree.root), exec)
+            exec(self.list:AddLine(s[1] or "-", "." .. (s[#s] or "-"), getFilesize(directory, self.tree.root)))
             continue 
         end
 
@@ -887,6 +888,8 @@ local function checkFilepath(root, dir)
     return root, dir
  end
 
+local DEBUG = true  
+
 function SSLE:OpenBrowser(directory, onOpen, onClose, parent)
     if not onOpen and not onClose and not directory and not parent then return end 
 
@@ -897,9 +900,15 @@ function SSLE:OpenBrowser(directory, onOpen, onClose, parent)
         directory = SSLE.modules.cache:Value4Key("SSLE-LastDir-Local") 
     end
 
+    local function kill()
+        if DEBUG == true then 
+            self.browserPopup:Remove() 
+        end
+    end
+
     directory = directory or ""
     onOpen    = onOpen  or function() end 
-    onClose   = onClose or function() end 
+    onClose   = onClose or kill
 
     if not self.browserPopup 
     or not self.browserWindow 
@@ -909,6 +918,7 @@ function SSLE:OpenBrowser(directory, onOpen, onClose, parent)
         self.browserWindow  = vgui.Create("DSleekFileBrowser", self.browserPopup)
         self.browserPopup.Close = function(self)
             self:SetVisible(false)
+            kill()
         end
     end
 
@@ -947,8 +957,9 @@ function SSLE:OpenBrowser(directory, onOpen, onClose, parent)
         popup:SetVisible(false)
         popup.OnClose = function() -- override it again, we dont want to trigger the onClose callback 
             save()
+            kill()
             return true 
-        end    
+        end     
         popup:Close()
     end 
 
@@ -998,6 +1009,7 @@ function SSLE:OpenBrowser(directory, onOpen, onClose, parent)
         SSLE.modules.cache:Value4Key("SSLE-LastDir-Local", browser.directory or "") 
         local root, dir = checkFilepath(browser.directory or "")
         onClose(root, dir)
+        kill()
         return true 
     end
 

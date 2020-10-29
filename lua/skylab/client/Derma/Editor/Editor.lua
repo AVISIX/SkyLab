@@ -31,7 +31,10 @@ end
 
 local self = {}
 
+skylab_editor_search_timer_counter = 0
 function self:CreateViews()
+    skylab_editor_search_timer_counter = skylab_editor_search_timer_counter + 1
+
     local super = self 
 
     if self.filename == "" then -- User didn't select a Folder 
@@ -79,9 +82,91 @@ function self:CreateElements()
         self.searchbar:Dock(TOP)
         self.searchbar:SetPlaceholderText("Search...")
         self.searchbar.TextChanged = function(self) 
-            if blockSearch == true then return end 
+            if blockSearch == true then 
+                blockSearch = false 
+                return 
+            end 
 
+            local tid = "search_editor_textchanged_timer" .. skylab_editor_search_timer_counter
 
+            if timer.Exists(tid) == true then timer.Remove(tid) end 
+            
+            timer.Create(tid, 1, 1, function()
+                local text = self:GetText()
+
+                super.tree:Reload()
+
+                if text == "" then 
+                    return 
+                end
+
+                local root = super.tree.root 
+                local dir  = super.tree.superNode.directory
+
+                if not root or not dir then return end 
+
+                local ratings = super.tree:SearchFile(root, dir, text, true, 25)
+
+                if ratings then 
+                    super.tree.queue = {}
+
+                    local toDestroy = {}
+
+                    local function hideAll(n)
+                        for k, v in pairs(n:GetChildNodes() or {}) do 
+                            local fp = v.directory .. (v.filename and v.filename or "")
+                            
+                            if toDestroy[fp] then continue end 
+ 
+                            if v.type == "folder" then 
+                                super.tree:Construct(super.tree.root, v.directory, super.tree:NodeForDirectory(v.directory), 1, 0, false)
+                            end
+
+                            toDestroy[fp] = v
+ 
+                            hideAll(v)
+                        end
+                    end
+
+                    hideAll(super.tree.superNode)
+                    do return end
+                    for k, v in pairs(ratings[#text]) do 
+                        if not v then continue end 
+                        
+                        local subs = string.Split(v.directory .. v.file, "/")
+
+                        local constructor = ""
+
+                        for k, v in pairs(subs) do 
+                            if not v or v == "" or string.gsub(v, "%s", "") == "" then continue end 
+
+                            if k == #subs and subs[#subs]:find("(%.)[a-zA-Z]+$") then 
+                                constructor = constructor .. v
+                            else 
+                                constructor = constructor .. v .. "/"  
+                                super.tree:Construct(super.tree.root, constructor, super.tree:NodeForDirectory(constructor), 1, 0, false)
+                            end 
+                            
+                      --      local node = toDestroy[constructor] or super.tree:NodeForDirectory(constructor)
+
+                            if toDestroy[constructor] then toDestroy[constructor] = nil end 
+
+                            local node = super.tree:NodeForDirectory(constructor)
+   
+                            if not node or node.type ~= "folder" or not node.SetExpanded then continue end
+
+                            node:SetExpanded(true)
+                        end
+                    end
+                    do return end 
+
+                    for _, v in pairs(toDestroy) do 
+                   --     print(_)
+                        super.tree.loaded[v.directory] = nil 
+                        v:Remove() 
+                    end
+                end
+            end)
         end
 
         self.tree = vgui.Create("DSleekFileTree", self.sidebar)
@@ -109,19 +194,18 @@ function self:CreateElements()
                     if not SSLE.browserPopup then return end 
 
                     local browser = SSLE.browserWindow
-                    local list = browser.list 
-
-                    local found = false     
+                    local list    = browser.list 
 
                     list:ClearSelection()
 
+                    local found = false     
+                    
                     ::again::
 
-                    for k, v in pairs(list:GetLines()) do 
+                    for _, v in pairs(list:GetLines()) do 
                         if not v then continue end 
-                        local text = v:GetColumnText(1)
+                        local text = v:GetColumnText(1) 
                         if not text then continue end 
-
                         if node.filename:find(text .. "(%.).*") then 
                             v:SetSelected(true)
                             list:OnRowSelected(v:GetID(), v)
@@ -131,23 +215,10 @@ function self:CreateElements()
                     end
 
                     if found == false then 
-                        for k, v in pairs(list.queue) do 
-                           -- if 
-                        end
+                        list.queue = {}
                         browser:ReloadList(false)
                         found = true
                         goto again  
-                        --[[ 
-                        for _, entry in pairs(list.queue) do 
-                            if entry and entry.callback and entry.args then
-                                local line = list:AddLine(entry.args) 
-                                list:OnLineAdded(entry.args, line)
-                                entry.callback()
-                                line:SetSelected(true)
-                                list:OnRowSelected(line:GetID(), line)
-                            end
-                        end
-                        list.queue = {}]]
                     end           
                 end)
             end

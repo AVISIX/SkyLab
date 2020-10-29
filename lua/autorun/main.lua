@@ -21,7 +21,7 @@ if SERVER then
 |_|  | |  __/ (_| | | | | | |  ____) |   <| |_| | | (_) | | | |
 (_)  |_|\___|\__,_|_| |_| |_| |_____/|_|\_\\__, |_|\___/|_| |_|
                                             __/ |              
-                                           |___/                    
+                                           |___/                     
 	]] ..  "\n")
 
     AddCSLuaFile()
@@ -35,7 +35,7 @@ if SERVER then
     import(l"shared/init/deceleration.lua")
     SSLE ["SSLE:InternalConstructor"]:ReliableChannel ("Loaded main modules.")
 
-
+ 
     -- Serverside Import
     import(l"server/init/acceleratedtransfer.lua")
     importFolder(l"server/*") 
@@ -48,9 +48,9 @@ if SERVER then
     addCSFolder(l"shared/*")
     SSLE ["SSLE:InternalConstructor"]:ReliableChannel ("Registered Clientside Files.")
 
-    local files, _ = file.Find("addons/skylab_editor/materials/skylab/*", "GAME")
+    local files, _ = file.Find("addons/SkyLab/materials/skylab/*", "GAME")
     for _, v in pairs(files) do 
-        resource.AddSingleFile("addons/skylab_editor/materials/skylab/"..v)
+        resource.AddSingleFile("addons/SkyLab/materials/skylab/"..v)
     end
     SSLE ["SSLE:InternalConstructor"]:ReliableChannel ("Registered Resource Files.")
 end

@@ -3,7 +3,7 @@ local LCS = {}
 -- https://www.lua.org/wshop12/Snyder1.pdf
 
 --http://lua-users.org/lists/lua-l/2009-07/msg00461.html
-function LCS.levenshtein(s, t)
+function LCS.levenshtein(s, t) -- The Wire Editor uses this, but I don't like it. Please use lcs_3b! 
 	local d, sn, tn = {}, #s, #t
 	local byte, min = string.byte, math.min
 	for i = 0, sn do d[i * tn] = i end
@@ -34,15 +34,15 @@ end
 
 -- Improved Recursive LCS Implementation
 local function _lcs_3b(A, i, B, j)
-    if (i == 0) or (j == 0) then
+    if i == 0 or j == 0 then
         return 0
-    elseif A[i] == B[j] then 
-        return _lcs_3b(A, i-1, B, j-1) + 1 
-    else
-        local a1 = _lcs_3b(A, i, B, j-1)
-        local b1 = _lcs_3b(A, i-1, B, j)
-        return math.max(a1, b1)
     end
+    
+    if A[i] == B[j] then 
+        return _lcs_3b(A, i-1, B, j-1) + 1 
+    end 
+
+    return math.max(_lcs_3b(A, i, B, j-1), _lcs_3b(A, i-1, B, j))
 end
 
 function LCS.lcs_3b(A, B)

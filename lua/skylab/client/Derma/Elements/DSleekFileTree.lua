@@ -119,6 +119,7 @@ end
 
 function self:CreateFileNode(parent, filename)
 	if not parent or not filename or not parent.AddNode then return end 
+	if self.loaded[parent.directory .. filename] then return end 
 
 	local fileNode = parent:AddNode(filename)
 
@@ -157,22 +158,27 @@ function self:CreateFileNode(parent, filename)
 		self:OnMenuConstructionFinished(menu)
 
 		menu:Open()
-	end
+	end 
+
+	if not self.loaded[parent.directory .. filename] then 
+		self.loaded[parent.directory .. filename] = fileNode
+ 	end 
 
 	self:FileNodeCreated(fileNode)
 end
 
-function self:AddFileNodes(directory)
+function self:AddFileNodes(directory, shouldQueue)
 	if self.showfiles == false then return end  
 	local fi, _ = self:LoadFiles(directory, self.root) 
 	local node = self:NodeForDirectory(directory) 
 	if not node then return end 
+	if shouldQueue == nil then shouldQueue = true end 
 
 	local c = 0
 	for k, v in pairs(fi) do 
 		if not v then continue end 
 		
-		if c < 25 then 
+		if c < 25 or shouldQueue == false then 
 			self:CreateFileNode(node, v)
 			c = c + 1
 			continue 
@@ -199,7 +205,7 @@ function self:QueueDirectory(directory, root, callback, shouldQueue)
 	if shouldQueue == false then 
 		local fi, fo = self:LoadFiles(directory, root)
 		callback(fi, fo)
-		self:AddFileNodes(directory)
+		self:AddFileNodes(directory, shouldQueue)
 		return 
 	end
 
@@ -482,6 +488,24 @@ function self:SetRoot(root, directory)
 	self.superNode = rn 
 
 	self:Construct(root, directory, rn, 1, 0, false)
+end
+
+function self:SoftReload(openLastDirectory)
+	if openLastDirectory == nil then openLastDirectory = true end 
+
+	local lastDir = self:SelectedDirectory()
+
+	self:Construct(self.root, self.superNode.directory ~= self.root and self.superNode.directory or "", self.superNode, 1, 0, false)
+
+	if openLastDirectory == true and lastDir then 
+		self:OpenDirectory(self.root, lastDir, nil, false, false)
+
+		local selected = self:NodeForDirectory(lastDir)
+
+		if not selected then return end 
+        
+		self:ScrollToChild(selected)
+	end
 end
 
 function self:Reload(openLastDirectory)
