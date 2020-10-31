@@ -169,6 +169,7 @@ function textbox:GetText()
 end
 
 function textbox:HasSelection()
+    if not self.selection then return false end 
     return (self.selection.start ~= nil and self.selection.ending ~= nil) or (self.selection.start ~= self.selection.ending)
 end
 ---------------
@@ -637,7 +638,7 @@ function textbox:Paint(w, h)
     -- Border Fade overlap
     draw.RoundedBox(0, self.boundsMargin, self.boundsMargin, w - self.boundsMargin * 2, h - self.boundsMargin * 2, self.colors.background)
 
-    if string.gsub(self.text, "%s", "") == "" then 
+    if self.text == "" then 
         draw.SimpleText(self.placeholder or "", self.font.n, self.textoffset, h / 2, self.colors.placeholder, TEXT_ALIGN_LEFT, TEXT_ALIGN_CENTER)
     end
 

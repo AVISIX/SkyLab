@@ -219,35 +219,52 @@ function filebrowser:Init()
     dock:Dock(LEFT)
     dock:DockMargin(5,5,0,0) 
     dock:SetAutoResize(true)
+
     local function checkCache(r)
         if not r then return false end 
+
         local cached = cache:Value4Key("SkyLab_AD4"..r)
+
         if cached then 
             local dirs = string.Split(cached, "/")
             local root = ""
+
             if dirs[1][1] == ">" then root = string.sub(dirs[1], 2, #dirs[1]) end
             if root ~= r then return false end 
+
             parent:SetDirectory(cached, false, false, false)
+
             return true 
         end
+
         return false 
     end
+
     local function loadLastDir(newRoot)
         cache:Value4Key("SkyLab_AD4" .. parent.root, parent.directory)
+
         parent:SetDirectory(newRoot, false, true, false)
+
         checkCache(parent.tree.root)
+
         self:RootSwapped()
     end
+
     local function iButton(r, i)
         i = i or self.rootIcons[r]
+
         if not i then return nil end  
+
         local b = dock:AddIcon(i, function()
             if parent.tree.root == r then return end 
             loadLastDir(r)
         end, r)
+
         b:SetTooltip("Open '" .. r .. "'") 
+
         return b 
     end
+
     iButton("GAME")
     iButton("LUA")
     iButton("DATA")
@@ -303,7 +320,7 @@ function filebrowser:Init()
                 local ratings = super.tree:SearchFile(super.tree.root, super.tree:SelectedDirectory(), text, true, 25)
 
                 if not ratings then return end 
-                
+
                 super:ClearPreview() 
                 super.list:Clear()
 
@@ -359,10 +376,12 @@ function filebrowser:Init()
             parent:SetDirectory(self.text, false, false, false)
             parent:RequestFocus()
         end
+
         self.lastFocus = status
     end
     pathbox.OnKeyCombo = function(self, a, b)
         if not a and not b then return end 
+
         if b == KEY_ENTER then 
             parent:SetDirectory(self.text, false, false, true)
             parent:ReloadList()
@@ -420,12 +439,15 @@ function filebrowser:Init()
     openbutton:SetSize(73,24)
     openbutton.OnClick = function(self, delay, code)
         if code ~= MOUSE_LEFT then return end 
+
         local iLine, pnl = parent.list:GetSelectedLine()
+
         if not iLine or not pnl then
             if parent.tree:SelectedDirectory() == "" then return end 
             parent.OnOpen(parent.tree.root, parent.tree:SelectedDirectory())
             return 
         end 
+
         parent.OnOpen((pnl.root or "DATA") .. "/" .. (pnl.directory or ""))
     end
     self.openbutton = openbutton 
@@ -433,24 +455,46 @@ function filebrowser:Init()
     local tree = vgui.Create("DSleekFileTree")
     tree.NodeSelected = function(self, node)
         if timer.Exists(tid) == true then timer.Remove(tid) end 
+
         parent.list:ClearQueue()
         blockSearch = true -- bruh 
         parent.searchbar:SetText("")
         -- When selected in a Node, add it to the path
 
         local final = ">" .. self.root .. "/"
+
         if node.directory ~= self.root then
             final = final.. node.directory 
         end
+
         parent:SetDirectory(final, false, true)
     end
+    tree.OnFileAdded = function(self, dir) -- When a File gets added, insert the default content from the profile for the language
+        if not dir or #dir == 0 then return end 
+        for id, _ in pairs(SSLE.profiles) do 
+            local profile = SSLE.GetProfile(id)
+            if profile.commonDirectories then 
+                for _, directory in pairs(profile.commonDirectories) do 
+                    if directory.root == self.root and string.GetPathFromFilename(dir):find(directory.directory) and profile.defaultContent then 
+                        file.Append(dir, profile.defaultContent)
+                        break
+                    end
+                end
+            end
+        end
+        parent:ReloadList(true)
+    end
+    tree.OnDeleted = tree.Reload
     tree.NodeCreated = function(self, node)
         node.Label.DoDoubleClick = function() end -- 2x Click sucks
         node.OnOptionAdded = function(self, menu, option)
             if option ~= "Open" then return end
+
             local r, d = tree.root, node.directory  
             if not r or not d or string.gsub(d, "[%s/]*", "") == "" then return end 
+
             menu:AddOption("Open in Editor", function()
+
                 local d = tree.root .. "/" .. node.directory 
                 
                 local dirs = string.Split(d, "/") or {}
@@ -463,7 +507,9 @@ function filebrowser:Init()
         end
         node.OnMenuConstructionFinished = function(self, menu) -- Add & Remove Favorites
             local r, d = tree.root, node.directory 
+
             if not r or not d then return end 
+
             if parent:HasFavorite(r, d) == false then 
                 menu:AddOption("Add to Favorites", function() 
                     parent:AddFavorite(tree.root, node.directory) 
@@ -480,20 +526,26 @@ function filebrowser:Init()
     
     local favorites = vgui.Create("DSleekTree")
     favorites.owner = self 
+
     scrollbarOverride(favorites.VBar)
+
     local function createRoot()
         favorites.root = favorites:AddNode("Favorites", "icon16/star.png")
         favorites.root.Label:SetTextColor(favorites.colors.text)    
         favorites.root:SetExpanded(true)
     end
+
     createRoot()
+
     local function fixNode(node)
         node.Label.DoDoubleClick = function() 
             node:InternalDoClick() 
             node:DoDoubleClick()
         end
+        
         node.DoDoubleClick = function() end 
     end
+    
     function favorites:Update()
         local root = favorites.root 
         
@@ -591,8 +643,9 @@ function filebrowser:Init()
     local centerpanel = vgui.Create("DPanel")
 
     local list = vgui.Create("DSleekListView", centerpanel)
-    list:SetMultiSelect(false)
+    list:SetMultiSelect(false()
     list:Dock(FILL)
+
     do 
         local n = list:AddColumn("Name")
         local t = list:AddColumn("Type")
@@ -608,8 +661,10 @@ function filebrowser:Init()
 
         list.n, list.t, list.s = n, t, s
     end 
+
     do 
         local lastDir = ""
+
         list.OnRowSelected = function( self, index, pnl )
             if not pnl.root or not pnl.directory then return end 
             if lastDir ~= pnl.root..pnl.directory then 
@@ -617,6 +672,7 @@ function filebrowser:Init()
                 lastDir = pnl.root..pnl.directory
             end
         end
+
         list.DoDoubleClick = function(self, id, pnl)
             parent.OnOpen((pnl.root or "DATA").."/"..(pnl.directory or ""))
         end
@@ -663,6 +719,7 @@ function filebrowser:Init()
         end
     end
 
+    -- This is shit idk why i did this 
     self.searchbar = search 
     self.treereload = treereload
     self.tree = tree 
@@ -695,7 +752,9 @@ function filebrowser:ReloadList(shouldQueue)
 
     if #files == 0 then 
         self.tree:LoadFiles(self.tree.root, selectedDir) 
+
         files = ((self.tree.fileCache[selectedDir] or {})[1] or {})
+
         if #files == 0 then 
             return 
         end 
@@ -703,26 +762,44 @@ function filebrowser:ReloadList(shouldQueue)
 
     for k, v in pairs(files) do
         if not v or string.gsub(v, "%s", "") == "" then continue end 
+
         local s = string.Split(v, ".")
         local directory = selectedDir .. v
 
         local function exec(line)
             if not line then return end 
+
             line.directory = directory 
             line.root = self.tree.root or "DATA"
             line.filename = s[1] or "-"
             line.filetype = s[2] or "-"
             line.OnRightClick = function(self)
                 local menu = DermaMenu()
+
                 menu:AddOption("Open", function()
                     super.OnOpen((self.root or "DATA").."/"..(self.directory or ""))
                 end)
+
+                if self.root == "DATA" then 
+                    menu:AddOption("Delete", function()
+                        SSLE:Confirm("Delete '" .. self.filename .. "'?", function()
+                            if not self.directory then return end 
+                            file.Delete(self.directory)
+                            self:Remove()
+                            super.tree:Reload()
+                            super:ReloadList(true)
+                        end, SSLE:GetWindow(self))
+                    end)  
+                end
+
                 menu:AddOption("Copy Filepath", function()
                     SetClipboardText(self.directory)
                 end)
+
                 menu:AddOption("Copy Root", function()
                     SetClipboardText(self.root)
-                end)			
+                end)	
+
                 menu:Open()
             end	
         end 
@@ -936,8 +1013,11 @@ function SSLE:OpenBrowser(directory, onOpen, onClose, parent)
         SSLE.modules.cache:Value4Key("SkyLab - Filebrowser - ListLCol", browser.list.n:GetWide() or 140)
         SSLE.modules.cache:Value4Key("SkyLab - Filebrowser - ListCCol", browser.list.t:GetWide() or 40)
         SSLE.modules.cache:Value4Key("SkyLab - Filebrowser - ListRCol", browser.list.s:GetWide() or 40)
+    end
 
-        local x, y = popup:GetPos()
+    self.browserPopup.StoppedDragging = function(self, x, y, w, h)   
+        SSLE.modules.cache:Value4Key("SkyLab - Filebrowser Last Width", w)
+        SSLE.modules.cache:Value4Key("SkyLab - Filebrowser Last Height", h)
         SSLE.modules.cache:Value4Key("SkyLab - Filebrowser - X", x)
         SSLE.modules.cache:Value4Key("SkyLab - Filebrowser - Y", y)
     end
@@ -955,6 +1035,7 @@ function SSLE:OpenBrowser(directory, onOpen, onClose, parent)
         save()
         onOpen(root, dir)
         popup:SetVisible(false)
+        SSLE.modules.cache:Value4Key("SSLE-LastDir-Local", browser.directory or "") 
         popup.OnClose = function() -- override it again, we dont want to trigger the onClose callback 
             save()
             kill()
@@ -964,12 +1045,6 @@ function SSLE:OpenBrowser(directory, onOpen, onClose, parent)
     end 
 
     browser:Dock(FILL)
-
-    -- Save current size to sqlite db 
-    popup.OnSizeChanged = function(self, w, h)
-        SSLE.modules.cache:Value4Key("SkyLab - Filebrowser Last Width", w)
-        SSLE.modules.cache:Value4Key("SkyLab - Filebrowser Last Height", h)
-    end
 
     local lastWidth  = math.max(tonumber(SSLE.modules.cache:Value4Key("SkyLab - Filebrowser Last Width") or "760") or 760, 760)
     local lastHeight = math.max(tonumber(SSLE.modules.cache:Value4Key("SkyLab - Filebrowser Last Height") or "480") or 480, 480)

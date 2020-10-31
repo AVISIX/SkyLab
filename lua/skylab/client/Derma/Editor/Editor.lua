@@ -9,6 +9,7 @@ local function gc(s, d) return tonumber(cache:Value4Key(s) or tostring(d)) or d 
 local function checkFilepath(root, dir)
     if not dir then 
         local dirs = string.Split(root, "/")
+
         if #dirs >= 2 then
             root = validateRoot(dirs[1][1] == ">" and string.sub(dirs[1], 2, #dirs[1]) or dirs[1])
             dir = table.concat(dirs, "/", 2, #dirs) 
@@ -16,6 +17,7 @@ local function checkFilepath(root, dir)
     else
         dir = (dir[1] == ">" and string.sub(dir, 2, #dir) or dir)
     end
+
     return root, dir
  end
 
@@ -36,8 +38,9 @@ function self:CreateViews()
     skylab_editor_search_timer_counter = skylab_editor_search_timer_counter + 1
 
     local super = self 
+    local owner = self 
 
-    if self.filename == "" then -- User didn't select a Folder 
+    if self.filename == "" then -- User didn't select a File  
         self.seperator = vgui.Create("DHorizontalDivider", self)
         self.seperator:SetLeftMin(100)
         self.seperator:SetRightMin(200)
@@ -46,24 +49,33 @@ function self:CreateViews()
         self.seperator.Paint = function(self, w, h) draw.RoundedBox(0,0,0,w,h,dark(150)) end
 
         self.sidebar = vgui.Create("DPanel")
-        self.sidebar.Paint = function(self,w,h) 
-            draw.RoundedBox(0,0,0,w,h,Color(0,255,0)) 
-        end 
+        self.sidebar.Paint = function(self,w,h) end 
 
         self.maincontainer = vgui.Create("DPanel")
-        super = self.maincontainer
+        owner = self.maincontainer
 
         self.seperator:SetRight(self.maincontainer)
         self.seperator:SetLeft(self.sidebar)
     end
 
-    self.topbar = vgui.Create("DPanel", super)
+    self.topbar = vgui.Create("DPanel", owner)
     self.topbar:Dock(TOP)
     self.topbar.Paint = function(self,w,h) 
         draw.RoundedBox(0,0,0,w,h,Color(255,0,0))
     end 
 
-    self.main = vgui.Create("DPanel", super)
+    self.oBrowser = vgui.Create("DSleekButton", self.topbar)
+    self.oBrowser:Dock(LEFT)
+    self.oBrowser:SetText("Open Filebrowser")
+    self.oBrowser:SetImage("icon16/folder_heart.png", 5)
+    self.oBrowser:SetImageTextLayout(B_LAYOUT_LEFT)
+    self.oBrowser:SetFont("Consolas", 14)
+    self.oBrowser:SizeToContents()
+    self.oBrowser.OnClick = function()
+        SSLE:OpenBrowser(function(r, d) super:OpenDirectory(r, d) end)
+    end
+
+    self.main = vgui.Create("DPanel", owner)
     self.main:Dock(FILL)
     self.main.Paint = function(self,w,h) 
         draw.RoundedBox(0,0,0,w,h,Color(0,0,255))
@@ -71,6 +83,10 @@ function self:CreateViews()
 
     self:CreateElements()
 end
+
+function self:IsFolderSelected()
+    return self.filename == ""
+end 
 
 function self:CreateElements()
     super = self 
@@ -80,6 +96,7 @@ function self:CreateElements()
   
         self.searchbar = vgui.Create("DSleekTextBox", self.sidebar)
         self.searchbar:Dock(TOP)
+        self.searchbar:SetFont("Consolas", 16)
         self.searchbar:SetPlaceholderText("Search...")
         self.searchbar.TextChanged = function(self) 
             if blockSearch == true then 
@@ -99,8 +116,8 @@ function self:CreateElements()
                 if text == "" then return end
 
                 local tree = super.tree 
-                local root = super.tree.root 
-                local dir  = super.tree.superNode.directory
+                local root = tree.root 
+                local dir  = tree.superNode.directory
 
                 if not root or not dir then return end 
 
@@ -125,11 +142,14 @@ function self:CreateElements()
             end
         end
         self.tree.FileNodeCreated = function(self, node)
+            node.OnMenuConstructed = function(self, menu)
+                menu:AddOption("Open", function()
+                    
+                end)
+            end
             node.OnMenuConstructionFinished = function(self, menu)
                 menu:AddOption("Open in FileBrowser", function() 
-                    SSLE:OpenBrowser(">" .. super.tree.root .. "/" .. node.directory, function(r, d)
-                        super:OpenDirectory(r, d)
-                    end)
+                    SSLE:OpenBrowser(">" .. super.tree.root .. "/" .. node.directory, function(r, d) super:OpenDirectory(r, d) end)
 
                     if not SSLE.browserPopup then return end 
 
@@ -144,8 +164,7 @@ function self:CreateElements()
 
                     for _, v in pairs(list:GetLines()) do 
                         if not v then continue end 
-                        local text = v:GetColumnText(1) 
-                        if not text then continue end 
+                        local text = v:GetColumnText(1) or ""
                         if node.filename:find(text .. "(%.).*") then 
                             v:SetSelected(true)
                             list:OnRowSelected(v:GetID(), v)
@@ -163,6 +182,20 @@ function self:CreateElements()
                 end)
             end
         end 
+        self.tree.OnFileAdded = function(self, dir) -- When a File gets added, insert the default content from the profile for the language
+            if not dir or #dir == 0 then return end 
+            for id, _ in pairs(SSLE.profiles) do 
+                local profile = SSLE.GetProfile(id)
+                if profile.commonDirectories then 
+                    for _, directory in pairs(profile.commonDirectories) do 
+                        if directory.root == self.root and string.GetPathFromFilename(dir):find(directory.directory) and profile.defaultContent then 
+                            file.Append(dir, profile.defaultContent)
+                            break
+                        end
+                    end
+                end
+            end
+        end
         self.tree:SetRoot(self.root, self.directory)
 
         self.reload = vgui.Create("DSleekButton", self.sidebar)
@@ -174,6 +207,7 @@ function self:CreateElements()
             blockSearch = true 
             super.searchbar:SetText("")
             super.tree:Reload(true) 
+            super.tree:RequestFocus()
         end
     end
 
@@ -185,8 +219,6 @@ function self:Init()
     self.root = ""
     self.directory = ""
     self.filename = ""
-
-    self:CreateViews()
 end
 
 function self:Close()
@@ -218,6 +250,10 @@ function self:OpenDirectory(root, directory, filename)
     end 
 
     self:SetVisible(true)
+
+    self:Clear()
+
+    self:CreateViews()
 end
 
 vgui.Register("SkyLab_Editor", self, "DSleekWindow") 

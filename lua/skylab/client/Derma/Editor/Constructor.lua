@@ -29,12 +29,29 @@ function self:Open(root, directory, file)
 
 	self.window:OpenDirectory(root, directory, file)
 
+	-- Open the last Selected Directory 
+	if self.window:IsFolderSelected() == true then 
+		local lastDir = cache:Value4Key("SkyLab Editor Last Directory")
+		if lastDir and string.gsub(lastDir, "%s", "") ~= "" then 
+			local args = string.Split(lastDir, "|||")
+			if #args == 2 and args[2] == directory then 
+				self.window.tree:OpenDirectory(self.window.tree.root, args[1], self.window.tree.superNode, false, true)
+			end
+		end
+	end
+
 	local function gc(s, d) return tonumber(cache:Value4Key(s) or tostring(d)) or d end
 
 	self.window:SetPos(gc("SkyLab Editor X", defaultX), gc("SkyLab Editor Y", defaultY))
 	self.window:SetSize(gc("SkyLab Editor W", defaultW), gc("SkyLab Editor H", defaultH))
 
 	self.window.BeforeClose = function(self) 
+		if self:IsFolderSelected() == true and self.tree:GetSelectedNode() and self.tree:GetSelectedNode().type == "folder" then
+			cache:Value4Key("SkyLab Editor Last Directory", self.tree:SelectedDirectory() .. "|||" .. directory)
+		else 
+			cache:Value4Key("SkyLab Editor Last Directory", "")
+		end
+
 		cache:Value4Key("SkyLab Editor H", self:GetTall())
 		cache:Value4Key("SkyLab Editor W",  self:GetWide())
 
@@ -45,7 +62,7 @@ function self:Open(root, directory, file)
 
 		cache:Value4Key("SkyLab Last Closed Directory", self.root .. "/" .. self.directory)
 
-		self:Remove()
+		self:Remove() -- Remove/Add comment for Debug purposes
 	end
 end
 

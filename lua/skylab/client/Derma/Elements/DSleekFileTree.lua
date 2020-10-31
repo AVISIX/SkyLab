@@ -114,6 +114,10 @@ function self:NodeExpanded(node) end
 function self:NodeCreated(node)  end
 function self:FileNodeCreated(node) end
 
+function self:OnFileAdded() end 
+function self:OnFolderAdded() end 
+function self:OnDeleted() end 
+
 function self:SetShowFiles(status)
 	if not status then return end 
 	self.showfiles = status 
@@ -122,6 +126,8 @@ end
 function self:CreateFileNode(parent, filename)
 	if not parent or not filename or not parent.AddNode then return end 
 	if self.loaded[parent.directory .. filename] then return end 
+
+	local super = self 
 
 	local fileNode = parent:AddNode(filename)
 
@@ -151,11 +157,24 @@ function self:CreateFileNode(parent, filename)
 
 		self:OnMenuConstructed(menu)
 
-		menu:AddOption("Copy Root", function() SetClipboardText(self.root) end)
-		self:OnOptionAdded(menu, "Copy Root")
+		local function option(i, c)
+			menu:AddOption(i, c)
+			self:OnOptionAdded(menu, i)
+		end
 
-		menu:AddOption("Copy Filepath", function() SetClipboardText(self.directory .. self.filename) end)
-		self:OnOptionAdded(menu, "Copy Filepath")
+		if self.root == "DATA" then 
+			option("Delete", function()
+				SSLE:Confirm("Delete '" .. self.Label:GetText() .. "'?", function()
+					if not self.directory then return end 
+					file.Delete(self.directory .. self.filename)
+					super:Reload(true)
+					super:OnDeleted(self.directory .. self.filename)
+				end, SSLE:GetWindow(self))
+			end)
+		end
+		
+		option("Copy Root", function() SetClipboardText(self.root) end)
+		option("Copy Filepath", function() SetClipboardText(self.directory .. self.filename) end)
 
 		self:OnMenuConstructionFinished(menu)
 
@@ -178,6 +197,7 @@ function self:CreateFolderNode(parent, directory, foldername)
 	end
 
 	local tree = self 
+	local root = self.root 
 
 	local node = parent:AddNode(foldername)
 	node.OnMenuConstructed = function() end
@@ -188,17 +208,84 @@ function self:CreateFolderNode(parent, directory, foldername)
 
 		node:OnMenuConstructed(menu)
 
-		menu:AddOption("Open", function()   
-			node:SetExpanded(true)
-			tree:SetSelectedItem(newParent) 
+		local function option(i, c)
+			menu:AddOption(i, c)
+			node:OnOptionAdded(menu, i)
+		end
+
+		option(node.m_bExpanded == true and "Close" or "Open", function()
+			node:SetExpanded(!node.m_bExpanded) 
+			tree:Construct(root, node.directory, node, 1)
+			tree:NodeExpanded(node)
 		end)
-		node:OnOptionAdded(menu, "Open")
 
-		menu:AddOption("Copy Root", function()     SetClipboardText(root)   end)
-		node:OnOptionAdded(menu, "Copy Root")	
+		if root == "DATA" then 
+			option("New File", function()
+				SSLE:TextConfirm("Enter File Name", function(text)
+					if string.gsub(text, "%s", "") == "" then return end 
 
-		menu:AddOption("Copy Filepath", function() SetClipboardText(directory) end)
-		node:OnOptionAdded(menu, "Copy Filepath")		
+					local newDir = directory 
+
+					if newDir == root then 
+						newDir = "" 
+					end
+
+					newDir = newDir .. text .. ".txt"
+
+					file.Write(newDir, "")
+
+					tree:Reload(true)
+					
+					tree:OnFileAdded(newDir)
+				end, SSLE:GetWindow(self))
+			end)
+
+			option("New Folder", function()
+				SSLE:TextConfirm("Enter Folder Name", function(text)
+					if string.gsub(text, "%s", "") == "" then return end 
+
+					local newDir = directory 
+
+					if newDir == root then 
+						newDir = "" 
+					end
+
+					newDir = newDir .. text .. "/"
+
+					file.CreateDir(newDir)
+
+					tree:Reload(true)
+					
+					local newNode = tree:NodeForDirectory(newDir)
+
+					tree:OnFolderAdded(newDir)
+
+					if IsValid(newNode) == false then return end  
+
+					tree:OpenDirectory(root, newDir, tree.superNode, false, false)
+				end, SSLE:GetWindow(tree))	
+			end)
+
+			local fi, fo = tree.fileCache[node.directory][1], tree.fileCache[node.directory][2]
+			if #(fi or {}) == 0 and #(fo or {}) == 0  then 
+				option("Delete", function()
+					SSLE:Confirm("Delete '" .. node.Label:GetText() .. "'?", function()
+						if not node.directory then return end 
+						file.Delete(node.directory)
+						tree:Reload(true)
+						tree:OnDeleted(node.directory)
+					end, SSLE:GetWindow(self))
+				end)
+			end 
+		end 
+	
+		option("Copy Root", function()
+			SetClipboardText(root)
+		end)	
+
+		option("Copy Filepath", function()
+			SetClipboardText(directory)
+		end)	
 
 		node:OnMenuConstructionFinished(menu)
 		
@@ -364,6 +451,139 @@ function self:OpenDirectory(root, directory, parent, shouldQueue, animate)
 	return node 
 end
 
+function self:SelectedDirectory()
+	if not self.m_pSelectedItem then return "" end 
+	return self.m_pSelectedItem.directory
+end
+
+function self:NodeForDirectory(directory)
+	return self.loaded[directory == "" and self.root or directory]
+end
+
+function self:OnNodeSelected(node)
+	self:NodeSelected(node)
+
+	if node.type ~= "folder" then return end 
+
+	self:Construct(self.root, node.directory, node, 1)
+
+	self.selectedNode = node 
+end
+
+function self:GetSelectedNode()
+	return self.selectedNode 
+end
+
+function self:SetRoot(root, directory)
+	if not self.roots[root] then return end 
+	
+	directory = directory or ""
+
+	self:Clear()
+
+	for k, v in pairs(folderqueue) do 
+		if v.super ~= self then continue end 
+		table.remove(folderqueue, k)
+	end
+
+	self.loaded = {}
+	self.fileCache = {}
+
+	local rn = self:AddNode(root .. (directory ~= "" and "/" .. directory or ""), "icon16/application_xp_terminal.png")
+	rn.directory = (directory ~= "" and directory or root)
+	rn.type      = "folder"
+	rn:SetExpanded(true, true)
+	rn.Label:SetTextColor(self.colors.text)
+
+	local super = self 
+
+	rn.DoRightClick = function(self)
+		local menu = DermaMenu()
+
+		if root == "DATA" then 
+			menu:AddOption("New File", function()
+				SSLE:TextConfirm("Enter File Name", function(text)
+					if string.gsub(text, "%s", "") == "" then return end 
+
+					local newDir = rn.directory 
+
+					if newDir == root then 
+						newDir = ""
+					end
+
+					newDir = newDir .. text .. ".txt"
+
+					file.Write(newDir, "")
+
+					super:Reload(true)
+
+					super:OnFileAdded(newDir)
+
+				end, SSLE:GetWindow(self))
+			end)
+
+			menu:AddOption("New Folder", function()
+				SSLE:TextConfirm("Enter Folder Name", function(text)
+					if string.gsub(text, "%s", "") == "" then return end 
+
+					local newDir = rn.directory 
+
+					if newDir == root then 
+						newDir = ""
+					end
+
+					newDir = newDir .. text .. "/"
+
+					file.CreateDir(newDir)
+
+					super:Reload(true)
+
+					local newNode = super:NodeForDirectory(newDir)
+
+					super:OnFolderAdded(newDir)
+
+					if IsValid(newNode) == false then return end  
+
+					super:OpenDirectory(root, newDir, rn, false, false)
+				end, SSLE:GetWindow(self))	
+			end)
+		end 
+
+		menu:Open()
+	end
+
+	self:NodeCreated(rn)
+	
+	self.root = root 
+	self.loaded[directory ~= "" and directory or root] = rn
+
+	self.superNode = rn 
+
+	self:Construct(root, directory, rn, 1, 0, false)
+end
+
+function self:Reload(openLastDirectory)
+	if openLastDirectory == nil then openLastDirectory = true end 
+
+	local lastDir = self:GetSelectedItem().m_bExpanded == true and self:SelectedDirectory() 
+
+	self:SetRoot(self.root, self.superNode.directory ~= root and self.superNode.directory)
+
+	if openLastDirectory == true and lastDir then 
+		self:OpenDirectory(self.root, lastDir, nil, false, false)
+
+		local selected = self:NodeForDirectory(lastDir)
+
+		if not selected then return end 
+        
+		self:ScrollToChild(selected)
+	end
+end
+
+function self:GetRoot()
+	self:Root().Label:GetText()
+end
+
 function self:SearchFile(root, directory, file, useLCS, limit)
 	self.lastRatings = self:_SearchFile(root, directory, file, useLCS, {}, limit)
 	return self.lastRatings 
@@ -399,7 +619,7 @@ function self:_SearchFile(root, directory, file, useLCS, ratings, limit)
 			if not v then continue end 
 			local f = fixFile(v) 
 			if useLCS == true then 
-				local _,_,s = string.find(string.lower(f), "("..string.lower(file)..")")
+				local _,_,s = string.find(string.lower(f), "(" .. string.lower(file) .. ")")
 				if s then 
 					table.insert(ratings, 
 					{
@@ -504,98 +724,10 @@ function self:RevealSearchResults(ratings)
 		end
 	end
 
-	for _, v in pairs(deletionQueue) do v:Remove() end
-end
-
-function self:SelectedDirectory()
-	if not self.m_pSelectedItem then return "" end 
-	return self.m_pSelectedItem.directory
-end
-
-function self:NodeForDirectory(directory)
-	return self.loaded[directory == "" and self.root or directory]
-end
-
-function self:OnNodeSelected(node)
-	self:NodeSelected(node)
-
-	if node.type ~= "folder" then return end 
-
-	self:Construct(self.root, node.directory, node, 1)
-
-	self.selectedNode = node 
-end
-
-function self:SetRoot(root, directory)
-	if not self.roots[root] then return end 
-	
-	directory = directory or ""
-
-	self:Clear()
-
-	for k, v in pairs(folderqueue) do 
-		if v.super ~= self then continue end 
-		table.remove(folderqueue, k)
-	end
-
-	self.loaded = {}
-	self.fileCache = {}
-
-	local rn = self:AddNode(root .. (directory ~= "" and "/" .. directory or ""), "icon16/application_xp_terminal.png")
-	rn.directory = (directory ~= "" and directory or root)
-	rn.type      = "folder"
-	rn:SetExpanded(true, true)
-	rn.Label:SetTextColor(self.colors.text)
-
-	self:NodeCreated(rn)
-	
-	self.root = root 
-	self.loaded[directory ~= "" and directory or root] = rn
-
-	self.superNode = rn 
-
-	self:Construct(root, directory, rn, 1, 0, false)
-end
-
-function self:SoftReload(openLastDirectory)
-	if openLastDirectory == nil then openLastDirectory = true end 
-
-	local lastDir = self:SelectedDirectory()
-
-	self:Construct(self.root, self.superNode.directory ~= self.root and self.superNode.directory or "", self.superNode, 1, 0, false)
-
-	if openLastDirectory == true and lastDir then 
-		self:OpenDirectory(self.root, lastDir, nil, false, false)
-
-		local selected = self:NodeForDirectory(lastDir)
-
-		if not selected then return end 
-        
-		self:ScrollToChild(selected)
+	for _, v in pairs(deletionQueue) do
+		if self.loaded[_] then self.loaded[_] = nil end
+		v:Remove() 
 	end
 end
-
-function self:Reload(openLastDirectory)
-	if openLastDirectory == nil then openLastDirectory = true end 
-
-	local lastDir = self:SelectedDirectory()
-
-	self:SetRoot(self.root, self.superNode.directory ~= root and self.superNode.directory)
-
-	if openLastDirectory == true and lastDir then 
-		self:OpenDirectory(self.root, lastDir, nil, false, false)
-
-		local selected = self:NodeForDirectory(lastDir)
-
-		if not selected then return end 
-        
-		self:ScrollToChild(selected)
-	end
-end
-
-function self:GetRoot()
-	self:Root().Label:GetText()
-end
-
 
 vgui.Register("DSleekFileTree", self, "DTree")

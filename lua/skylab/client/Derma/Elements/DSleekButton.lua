@@ -85,7 +85,7 @@ function button:Init()
     self.colors.border     = Color(0,255,255)
     self.boundsMargin    = 1
     self.imageSizeOffset = 0
-    self.borderFadeSpeed = 4
+    self.borderFadeSpeed = 8
     self.pulsationSpeed  = 15 
     self.hoverstrength   = 1.75
     self.clickstrength   = 1.75
@@ -103,7 +103,11 @@ function button:Init()
         an = ""
     }
 
+    self.textX = 0
+    self.textY = 0
+
     self.imagelayout = B_LAYOUT_NONE
+    self.allignToText = true 
 
     self.lastFrame = RealTime()
     self.lastClickTiming = RealTime()
@@ -149,8 +153,10 @@ function button:SetImage(URI, size, layout)
     if not self.image then self:SetImageTextLayout(B_LAYOUT_LEFT) end 
 end
 
-function button:SetImageTextLayout(layout)
+function button:SetImageTextLayout(layout, nextToText)
     if not layout then return end 
+    if nextToText == nil then nextToText = true end 
+    self.allignToText = nextToText
     self.imagelayout = layout 
 end
 
@@ -185,6 +191,22 @@ function button:Pulsate()
     self.pulse = {true, RealTime()} 
 end
 
+function button:SizeToContents()
+    local cH = self.font.h 
+    if cH < self.image:GetTall() then 
+        cH = self.image:GetTall()
+    end
+
+    local cW
+    if self.imagelayout == B_LAYOUT_NONE then 
+        cW = self.font.w * #self.text 
+    else 
+        cW = self.font.w * #self.text + self.image:GetWide() / 2 + self.imageSizeOffset * 2 
+    end
+
+    self:SetSize(cW, cH)
+end
+
 function button:OnMousePressed(code)
     self:Pulsate()
     self:OnClick(RealTime() - self.lastClickTiming, code)
@@ -197,7 +219,12 @@ function button:PaintText(w, h)
     local textHeight = self.font.h 
 
     if self.imagelayout ~= B_LAYOUT_NONE and IsValid(self.image) == true then 
-        local izo = self.imageSizeOffset * 2 
+        local izo = self.imageSizeOffset 
+
+        if self.allignToText == true then 
+            izo = izo / 2
+        end
+
         local iw  = self.image:GetWide() + izo
         local ih  = self.image:GetTall() + izo
               
@@ -212,7 +239,12 @@ function button:PaintText(w, h)
         end
     end
 
-    draw.SimpleText(self.text, self.font.n, w / 2 - textWidth / 2, h / 2 - textHeight / 2, Color(255,255,255))
+    local x, y = (w / 2 - textWidth / 2), (h / 2 - textHeight / 2)
+
+    draw.SimpleText(self.text, self.font.n, x, y, Color(255,255,255))
+
+    self.textX = x 
+    self.textY = y 
 end
 
 function button:PerformLayout(w, h)
@@ -230,14 +262,28 @@ function button:PerformLayout(w, h)
             return 
         end
 
-        if self.imagelayout == B_LAYOUT_LEFT then 
-            self.image:SetPos(self.imageSizeOffset, h / 2 - wh / 2)
-        elseif self.imagelayout == B_LAYOUT_RIGHT then 
-            self.image:SetPos(w - self.imageSizeOffset - self.image:GetWide(), h / 2 - wh / 2)
-        elseif self.imagelayout == B_LAYOUT_BOTTOM then 
-            self.image:SetPos(w / 2 - wh / 2, h - self.imageSizeOffset - self.image:GetTall())
-        elseif self.imagelayout == B_LAYOUT_TOP then 
-            self.image:SetPos(w / 2 - wh / 2, self.imageSizeOffset)
+        local iW, iH = self.image:GetSize()
+
+        if self.allignToText == false then 
+            if self.imagelayout == B_LAYOUT_LEFT then 
+                self.image:SetPos(self.imageSizeOffset, h / 2 - wh / 2)
+            elseif self.imagelayout == B_LAYOUT_RIGHT then 
+                self.image:SetPos(w - self.imageSizeOffset - iW, h / 2 - wh / 2)
+            elseif self.imagelayout == B_LAYOUT_BOTTOM then 
+                self.image:SetPos(w / 2 - wh / 2, h - self.imageSizeOffset - iH)
+            elseif self.imagelayout == B_LAYOUT_TOP then 
+                self.image:SetPos(w / 2 - wh / 2, self.imageSizeOffset)
+            end
+        else 
+            if self.imagelayout == B_LAYOUT_LEFT then 
+                self.image:SetPos(self.textX - self.imageSizeOffset - iW, h / 2 - wh / 2)
+            elseif self.imagelayout == B_LAYOUT_RIGHT then 
+                self.image:SetPos(self.textX + (#self.text * self.font.w) + self.imageSizeOffset, h / 2 - wh / 2)
+            elseif self.imagelayout == B_LAYOUT_BOTTOM then 
+                self.image:SetPos(w / 2 - wh / 2, self.textY + self.imageSizeOffset)
+            elseif self.imagelayout == B_LAYOUT_TOP then 
+                self.image:SetPos(w / 2 - wh / 2, self.textY - self.imageSizeOffset - self.font.h)
+            end
         end
     end
 end

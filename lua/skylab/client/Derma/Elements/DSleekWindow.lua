@@ -52,6 +52,23 @@ function window:Init()
 	self.lastSize = {}
 end
 
+function window:Clear()
+	local function deleteChildren(element)
+		for _, child in ipairs(element:GetChildren()) do 
+			if IsValid(child) == false then continue end 
+			
+			if child == self.btnClose 
+			or child == self.lblTitle 
+			or child == self.imgIcon then continue end 
+
+			deleteChildren(child)
+			child:Remove()
+		end
+	end
+
+	deleteChildren(self)
+end
+
 function window:SetEnableBoundariesClamp(status)
 	self.sebc = status 
 end
@@ -65,6 +82,7 @@ function window:SetAllowedDoubleClickFullscreen(status)
 end
 
 function window:BeforeClose() end 
+function window:StoppedDragging(x,y,w,h) end
 
 function window:Close()
 	self:BeforeClose()
@@ -114,6 +132,9 @@ function window:OnMouseReleased()
 	elseif my >= ScrH() - 1 then 
 		self:AssTicTac(ScrW(), ScrH() / 2,0,ScrH() / 2)
 	end
+
+	local x, y = self:GetPos()
+	self:StoppedDragging(x, y, self:GetWide(), self:GetTall())
 end
 
 function window:AssTicTac(w, h, x, y)

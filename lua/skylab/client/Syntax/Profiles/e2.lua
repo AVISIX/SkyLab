@@ -398,6 +398,22 @@ SSLE.RegisterProfile("Expression 2", function()
             ppcommands       = Color(240,96,240),
             error            = Color(241,96,96),
             others           = Color(241,96,96)
-        }
+        }, 
+
+        defaultContent = [[@name
+@inputs
+@outputs
+@persist
+@trigger
+
+if(first()) 
+{
+    #[
+            Auto Generated Code by SkyLab Editor!
+            Visit the Workshop for more info about SkyLab :D 
+    ]#
+
+    print("Hello World!")
+}]]
     }
 end)

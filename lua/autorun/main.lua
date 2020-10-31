@@ -103,6 +103,7 @@ if CLIENT then
      
     
     importFolder(l"client/Derma/Elements/*")
+    import(l"client/Derma/Editor/UtilPopups.lua")
     import(l"client/Derma/Editor/Editor.lua")
     importFolder(l"client/Derma/*") 
     
