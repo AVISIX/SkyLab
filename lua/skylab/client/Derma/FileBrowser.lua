@@ -302,40 +302,40 @@ function filebrowser:Init()
 
                 local ratings = super.tree:SearchFile(super.tree.root, super.tree:SelectedDirectory(), text, true, 25)
 
-                if ratings then 
-                    super:ClearPreview() 
-                    super.list:Clear()
+                if not ratings then return end 
+                
+                super:ClearPreview() 
+                super.list:Clear()
 
-                    for k, v in pairs(ratings[#text] or {}) do
-                        if not v then continue end 
+                for k, v in pairs(ratings or {}) do
+                    if not v then continue end 
 
-                        local s = string.Split(v.file, ".")
-                        local directory = v.directory .. v.file 
+                    local s = string.Split(v.file, ".")
+                    local directory = v.directory .. v.file 
 
-                        super.list:QueueLine(s[1] or "-", "." .. (s[#s] or "-"), getFilesize(directory, super.tree.root), function(line)
-                            line.directory = directory 
-                            line.root = v.root
-                            line.filename = s[1] or "-"
-                            line.filetype = s[2] or "-"
-                            line.OnRightClick = function(self)
-                                local menu = DermaMenu()
+                    super.list:QueueLine(s[1] or "-", "." .. (s[#s] or "-"), getFilesize(directory, super.tree.root), function(line)
+                        line.directory = directory 
+                        line.root = v.root
+                        line.filename = s[1] or "-"
+                        line.filetype = s[2] or "-"
+                        line.OnRightClick = function(self)
+                            local menu = DermaMenu()
 
-                                menu:AddOption("Open", function()
-                                    super.OnOpen((self.root or "DATA").."/"..(self.directory or ""))
-                                end)
+                            menu:AddOption("Open", function()
+                                super.OnOpen((self.root or "DATA").."/"..(self.directory or ""))
+                            end)
 
-                                menu:AddOption("Copy Filepath", function()
-                                    SetClipboardText(self.directory)
-                                end)
+                            menu:AddOption("Copy Filepath", function()
+                                SetClipboardText(self.directory)
+                            end)
 
-                                menu:AddOption("Copy Root", function()
-                                    SetClipboardText(self.root)
-                                end)
+                            menu:AddOption("Copy Root", function()
+                                SetClipboardText(self.root)
+                            end)
 
-                                menu:Open()
-                            end	
-                        end)
-                    end
+                            menu:Open()
+                        end	
+                    end)
                 end
             end)
         end

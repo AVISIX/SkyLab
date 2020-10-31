@@ -99,6 +99,8 @@ function self:Init()
 
 	self.selectedNode = {}
 
+	self.lastRatings = {}
+
 	scrollbarOverride(self.VBar)
 end 
 
@@ -136,7 +138,7 @@ function self:CreateFileNode(parent, filename)
 	elseif SSLE.videoextensions[extension] then 
 		fileNode:SetIcon("icon16/page_white_cd.png")
 	elseif SSLE.codeextensions[extension] then 
-		fileNode:SetIcon("icon16/page_white_code_reg.png")
+		fileNode:SetIcon("icon16/page_white_code_red.png")
 	else
 		fileNode:SetIcon("icon16/page_white.png")
 	end
@@ -174,6 +176,8 @@ function self:CreateFolderNode(parent, directory, foldername)
 		local subs = string.Split(directory, "/")
 		foldername = subs[#subs]
 	end
+
+	local tree = self 
 
 	local node = parent:AddNode(foldername)
 	node.OnMenuConstructed = function() end
@@ -360,16 +364,16 @@ function self:OpenDirectory(root, directory, parent, shouldQueue, animate)
 	return node 
 end
 
-function self:SearchFile(root, directory, file, useLCS, ratings, limit)
+function self:SearchFile(root, directory, file, useLCS, limit)
+	self.lastRatings = self:_SearchFile(root, directory, file, useLCS, {}, limit)
+	return self.lastRatings 
+end
+
+function self:_SearchFile(root, directory, file, useLCS, ratings, limit)
 	if not root or not directory or not file then return nil end 
 	local parent = self:NodeForDirectory(directory)
 
-	if type(ratings) == "number" then 
-		limit = ratings 
-		ratings = {}
-	else 
-		ratings = ratings or {}
-	end 
+	ratings = ratings or {}
 
 	if useLCS == nil then useLCS = true end 
 
@@ -384,13 +388,7 @@ function self:SearchFile(root, directory, file, useLCS, ratings, limit)
 
 	local function reachedLimit(toCheck)
 		if useLCS == false or not limit or type(limit) ~= "number" or limit == math.huge then return false end 
-		local counter = 0
-		for _, v in pairs(toCheck or ratings) do 
-			if not v or type(v) ~= "table" then continue end 
-			counter = counter + #v 
-			if counter >= limit then return true end 
-		end 
-		return false 
+		return #(toCheck or ratings) > limit 
 	end
 
 	if reachedLimit() == true then return ratings end 
@@ -401,19 +399,10 @@ function self:SearchFile(root, directory, file, useLCS, ratings, limit)
 			if not v then continue end 
 			local f = fixFile(v) 
 			if useLCS == true then 
-		--		local lcs_rating 
 				local _,_,s = string.find(string.lower(f), "("..string.lower(file)..")")
-				local lcs_rating = #(s or "")
-				--[[ 
-				if #file > 4 then 
-					local _,_,s = string.find(f, "("..file..")")
-					lcs_rating = #(s or "")
-				else 
-					lcs_rating = SSLE.modules.lcs.lcs_3b(file, f) -- Use LCS to see which are the most similar 
-				end ]]
-				if lcs_rating >= #file then 
-					if not ratings[lcs_rating] then ratings[lcs_rating] = {} end
-					table.insert(ratings[lcs_rating], {
+				if s then 
+					table.insert(ratings, 
+					{
 						root = root,
 						directory = directory,
 						file = v,
@@ -443,7 +432,7 @@ function self:SearchFile(root, directory, file, useLCS, ratings, limit)
 	for k, v in pairs(self.fileCache[directory][2]) do 
 		if not v then continue end 
 
-		local a, b, c, d, e = self:SearchFile(root, directory .. v .. "/", file, useLCS, ratings)
+		local a, b, c, d, e = self:_SearchFile(root, directory .. v .. "/", file, useLCS, ratings)
 
 		if useLCS == true then 
 			if reachedLimit(a) == true then break end 
@@ -459,6 +448,63 @@ function self:SearchFile(root, directory, file, useLCS, ratings, limit)
 	if useLCS == true then return ratings end 
 
 	return nil  
+end
+
+function self:RevealSearchResults(ratings)
+	if not ratings then 
+		ratings = self.lastRatings 
+		if not ratings then return end 
+	end
+
+	self.queue = {}
+
+	local deletionQueue = {}
+
+	local function registerSubnodesForDeletion(n)
+		for k, v in pairs(n:GetChildNodes() or {}) do  
+			if not v then continue end 
+			local fp = v.directory .. (v.filename and v.filename or "")
+			deletionQueue[fp] = v
+			registerSubnodesForDeletion(v)
+		end
+	end
+
+	registerSubnodesForDeletion(self.superNode)
+
+	for k, v in ipairs(ratings) do 
+		if not v then continue end 
+
+		local subs = string.Split(v.directory .. v.file, "/")
+		local constructor = ""
+
+		for k, v in ipairs(subs) do 
+			if not v or v == "" or string.gsub(v, "%s", "") == "" then continue end 
+
+			local prevConstructor = constructor 
+
+			if k == #subs and subs[#subs]:find("(%.)[a-zA-Z]+$") then 
+				constructor = constructor .. v
+				if not self.loaded[constructor] then  
+					self:CreateFileNode(self:NodeForDirectory(prevConstructor), v) -- If the File exists but the Node hasnt been loaded yet, add it manually.
+				end 
+			else 
+				constructor = constructor .. v .. "/"  
+				if not self.loaded[constructor] then  
+					self:CreateFolderNode(prevConstructor ~= "" and self:NodeForDirectory(constructor) or self.superNode, constructor, v) -- Same shit but for Folders ;)
+				end 
+			end 
+
+			if deletionQueue[constructor] then deletionQueue[constructor] = nil end 
+
+			local node = self:NodeForDirectory(constructor)
+
+			if not node or node.type ~= "folder" or not node.SetExpanded then continue end
+
+			node:SetExpanded(true)
+		end
+	end
+
+	for _, v in pairs(deletionQueue) do v:Remove() end
 end
 
 function self:SelectedDirectory()

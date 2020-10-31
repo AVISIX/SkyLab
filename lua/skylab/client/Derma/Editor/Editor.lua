@@ -104,61 +104,8 @@ function self:CreateElements()
 
                 if not root or not dir then return end 
 
-                local ratings = super.tree:SearchFile(root, dir, text, true, 25) -- All the Search results :D 
-
-                if not ratings then return end 
-
-                super.tree.queue = {}
-
-                local deletionQueue = {}
-
-                local function registerSubnodesForDeletion(n)
-                    for k, v in pairs(n:GetChildNodes() or {}) do  
-                        if not v then continue end 
-                        local fp = v.directory .. (v.filename and v.filename or "")
-                        deletionQueue[fp] = v
-                        registerSubnodesForDeletion(v)
-                    end
-                end
-
-                registerSubnodesForDeletion(super.tree.superNode)
-
-                for k, v in pairs(ratings[#text]) do 
-                    if not v then continue end 
-
-                    local subs = string.Split(v.directory .. v.file, "/")
-                    local constructor = ""
-
-                    for k, v in pairs(subs) do 
-                        if not v or v == "" or string.gsub(v, "%s", "") == "" then continue end 
-
-                        local prevConstructor = constructor 
-
-                        if k == #subs and subs[#subs]:find("(%.)[a-zA-Z]+$") then 
-                            constructor = constructor .. v
-                            if not tree.loaded[constructor] then  
-                                tree:CreateFileNode(tree:NodeForDirectory(prevConstructor), v) -- If the File exists but the Node hasnt been loaded yet, add it manually.
-                            end 
-                        else 
-                            constructor = constructor .. v .. "/"  
-                            if not tree.loaded[constructor] then  
-                                tree:CreateFolderNode(prevConstructor ~= "" and tree:NodeForDirectory(constructor) or tree.superNode, constructor, v) -- Same shit but for Folders ;)
-                            end 
-                        end 
-
-                        if deletionQueue[constructor] then deletionQueue[constructor] = nil end 
-
-                        local node = super.tree:NodeForDirectory(constructor)
-
-                        if not node or node.type ~= "folder" or not node.SetExpanded then continue end
-
-                        node:SetExpanded(true)
-                    end
-                end
-
-                for _, v in pairs(deletionQueue) do 
-                    v:Remove() 
-                end
+                super.tree:SearchFile(root, dir, text, true, 25) -- All the Search results :D 
+                tree:RevealSearchResults()
             end)
         end
 
