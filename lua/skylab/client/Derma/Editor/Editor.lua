@@ -96,75 +96,68 @@ function self:CreateElements()
 
                 super.tree:Reload()
 
-                if text == "" then 
-                    return 
-                end
+                if text == "" then return end
 
+                local tree = super.tree 
                 local root = super.tree.root 
                 local dir  = super.tree.superNode.directory
 
                 if not root or not dir then return end 
 
-                local ratings = super.tree:SearchFile(root, dir, text, true, 25)
+                local ratings = super.tree:SearchFile(root, dir, text, true, 25) -- All the Search results :D 
 
-                if ratings then 
-                    super.tree.queue = {}
+                if not ratings then return end 
 
-                    local toDestroy = {}
+                super.tree.queue = {}
 
-                    local function hideAll(n)
-                        for k, v in pairs(n:GetChildNodes() or {}) do 
-                            local fp = v.directory .. (v.filename and v.filename or "")
-                            
-                            if toDestroy[fp] then continue end 
- 
-                            if v.type == "folder" then 
-                                super.tree:Construct(super.tree.root, v.directory, super.tree:NodeForDirectory(v.directory), 1, 0, false)
-                            end
+                local deletionQueue = {}
 
-                            toDestroy[fp] = v
- 
-                            hideAll(v)
-                        end
-                    end
-
-                    hideAll(super.tree.superNode)
-                    do return end
-                    for k, v in pairs(ratings[#text]) do 
+                local function registerSubnodesForDeletion(n)
+                    for k, v in pairs(n:GetChildNodes() or {}) do  
                         if not v then continue end 
-                        
-                        local subs = string.Split(v.directory .. v.file, "/")
+                        local fp = v.directory .. (v.filename and v.filename or "")
+                        deletionQueue[fp] = v
+                        registerSubnodesForDeletion(v)
+                    end
+                end
 
-                        local constructor = ""
+                registerSubnodesForDeletion(super.tree.superNode)
 
-                        for k, v in pairs(subs) do 
-                            if not v or v == "" or string.gsub(v, "%s", "") == "" then continue end 
+                for k, v in pairs(ratings[#text]) do 
+                    if not v then continue end 
 
-                            if k == #subs and subs[#subs]:find("(%.)[a-zA-Z]+$") then 
-                                constructor = constructor .. v
-                            else 
-                                constructor = constructor .. v .. "/"  
-                                super.tree:Construct(super.tree.root, constructor, super.tree:NodeForDirectory(constructor), 1, 0, false)
+                    local subs = string.Split(v.directory .. v.file, "/")
+                    local constructor = ""
+
+                    for k, v in pairs(subs) do 
+                        if not v or v == "" or string.gsub(v, "%s", "") == "" then continue end 
+
+                        local prevConstructor = constructor 
+
+                        if k == #subs and subs[#subs]:find("(%.)[a-zA-Z]+$") then 
+                            constructor = constructor .. v
+                            if not tree.loaded[constructor] then  
+                                tree:CreateFileNode(tree:NodeForDirectory(prevConstructor), v) -- If the File exists but the Node hasnt been loaded yet, add it manually.
                             end 
-                            
-                      --      local node = toDestroy[constructor] or super.tree:NodeForDirectory(constructor)
+                        else 
+                            constructor = constructor .. v .. "/"  
+                            if not tree.loaded[constructor] then  
+                                tree:CreateFolderNode(prevConstructor ~= "" and tree:NodeForDirectory(constructor) or tree.superNode, constructor, v) -- Same shit but for Folders ;)
+                            end 
+                        end 
 
-                            if toDestroy[constructor] then toDestroy[constructor] = nil end 
+                        if deletionQueue[constructor] then deletionQueue[constructor] = nil end 
 
-                            local node = super.tree:NodeForDirectory(constructor)
-   
-                            if not node or node.type ~= "folder" or not node.SetExpanded then continue end
+                        local node = super.tree:NodeForDirectory(constructor)
 
-                            node:SetExpanded(true)
-                        end
+                        if not node or node.type ~= "folder" or not node.SetExpanded then continue end
+
+                        node:SetExpanded(true)
                     end
-                    do return end 
+                end
 
-                    for _, v in pairs(toDestroy) do 
-                   --     print(_)
-                        super.tree.loaded[v.directory] = nil 
-                        v:Remove() 
-                    end
+                for _, v in pairs(deletionQueue) do 
+                    v:Remove() 
                 end
             end)
         end

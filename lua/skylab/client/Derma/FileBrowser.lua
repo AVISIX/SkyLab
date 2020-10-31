@@ -303,7 +303,7 @@ function filebrowser:Init()
                 local ratings = super.tree:SearchFile(super.tree.root, super.tree:SelectedDirectory(), text, true, 25)
 
                 if ratings then 
-                    super:ClearPreview()
+                    super:ClearPreview() 
                     super.list:Clear()
 
                     for k, v in pairs(ratings[#text] or {}) do

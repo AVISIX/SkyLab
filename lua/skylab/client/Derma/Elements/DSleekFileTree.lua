@@ -167,6 +167,56 @@ function self:CreateFileNode(parent, filename)
 	self:FileNodeCreated(fileNode)
 end
 
+function self:CreateFolderNode(parent, directory, foldername)
+	if self.loaded[directory] then return self.loaded[directory] end  
+
+	if not foldername then 
+		local subs = string.Split(directory, "/")
+		foldername = subs[#subs]
+	end
+
+	local node = parent:AddNode(foldername)
+	node.OnMenuConstructed = function() end
+	node.OnMenuConstructionFinished = function() end 
+	node.OnOptionAdded = function() end 
+	node.DoRightClick = function(self)
+		local menu = DermaMenu()
+
+		node:OnMenuConstructed(menu)
+
+		menu:AddOption("Open", function()   
+			node:SetExpanded(true)
+			tree:SetSelectedItem(newParent) 
+		end)
+		node:OnOptionAdded(menu, "Open")
+
+		menu:AddOption("Copy Root", function()     SetClipboardText(root)   end)
+		node:OnOptionAdded(menu, "Copy Root")	
+
+		menu:AddOption("Copy Filepath", function() SetClipboardText(directory) end)
+		node:OnOptionAdded(menu, "Copy Filepath")		
+
+		node:OnMenuConstructionFinished(menu)
+		
+		menu:Open()
+	end
+
+	node.Label:SetTextColor(self.colors.text)
+	node.directory = directory
+	node.type = "folder"
+	node.Expander.DoClick = function(s) 
+		local node = s:GetParent()
+		node:SetExpanded(!node.m_bExpanded) 
+		self:Construct(root, node.directory, node, 1)
+		self:NodeExpanded(node)
+	end
+
+	self:NodeCreated(node) 
+	self.loaded[directory] = node 
+	
+	return node 
+end
+
 function self:AddFileNodes(directory, shouldQueue)
 	if self.showfiles == false then return end  
 	local fi, _ = self:LoadFiles(directory, self.root) 
@@ -192,7 +242,6 @@ function self:AddFileNodes(directory, shouldQueue)
 			super = self
 		})
 	end
-
 end
 
 function self:QueueDirectory(directory, root, callback, shouldQueue)
@@ -267,49 +316,7 @@ function self:Construct(root, directory, parent, maxRecursion, curRecursion, sho
 
 			local newdir = (directory ~= root and directory or "") .. v .. "/"
 
-			local newParent 
-			if not self.loaded[newdir] and parent.AddNode then 
-				newParent = parent:AddNode(v)
-				newParent.OnMenuConstructed = function() end
-				newParent.OnMenuConstructionFinished = function() end 
-				newParent.OnOptionAdded = function() end 
-				newParent.DoRightClick = function(self)
-					local menu = DermaMenu()
-
-					newParent:OnMenuConstructed(menu)
-
-					menu:AddOption("Open", function()   
-						newParent:SetExpanded(true)
-						tree:SetSelectedItem(newParent) 
-					end)
-					newParent:OnOptionAdded(menu, "Open")
-
-					menu:AddOption("Copy Root", function()     SetClipboardText(root)   end)
-					newParent:OnOptionAdded(menu, "Copy Root")	
-
-					menu:AddOption("Copy Filepath", function() SetClipboardText(newdir) end)
-					newParent:OnOptionAdded(menu, "Copy Filepath")		
-
-					newParent:OnMenuConstructionFinished(menu)
-					
-					menu:Open()
-				end
-
-				self:NodeCreated(newParent) 
-				self.loaded[newdir] = newParent 
-			else 
-				newParent = self.loaded[newdir]
-			end
-
-			newParent.Label:SetTextColor(self.colors.text)
-			newParent.directory = newdir
-			newParent.type = "folder"
-			newParent.Expander.DoClick = function(s) 
-				local node = s:GetParent()
-				node:SetExpanded(!node.m_bExpanded) 
-				self:Construct(root, node.directory, node, 1)
-				tree:NodeExpanded(node)
-			end
+			local newParent = self:CreateFolderNode(parent, newdir, v)
 
 			if curRecursion < maxRecursion then 
 				self:Construct(root, newdir, newParent, maxRecursion, curRecursion + 1, shouldQueue)
@@ -394,10 +401,24 @@ function self:SearchFile(root, directory, file, useLCS, ratings, limit)
 			if not v then continue end 
 			local f = fixFile(v) 
 			if useLCS == true then 
-				local lcs_rating = SSLE.modules.lcs.lcs_3b(file, f) -- Use LCS to see which are the most similar 
+		--		local lcs_rating 
+				local _,_,s = string.find(string.lower(f), "("..string.lower(file)..")")
+				local lcs_rating = #(s or "")
+				--[[ 
+				if #file > 4 then 
+					local _,_,s = string.find(f, "("..file..")")
+					lcs_rating = #(s or "")
+				else 
+					lcs_rating = SSLE.modules.lcs.lcs_3b(file, f) -- Use LCS to see which are the most similar 
+				end ]]
 				if lcs_rating >= #file then 
 					if not ratings[lcs_rating] then ratings[lcs_rating] = {} end
-					table.insert(ratings[lcs_rating], {root=root,directory=directory,file=v,fixed=f})
+					table.insert(ratings[lcs_rating], {
+						root = root,
+						directory = directory,
+						file = v,
+						fixed = f
+					})
 				end
 			elseif f == file  then -- If LCS is disabled, just search for the exactly same word
 				return root, directory, files, self.fileCache[directory][2], ratings
