@@ -69,7 +69,7 @@ if CLIENT then
 
     include(l"import.lua") 
  
-    skylon_skylab_reset_imports()  
+    skylon_skylab_reset_imports()   
   
     -- Shared Init  
     import(l"shared/init/LuaExtras.lua")
@@ -90,7 +90,7 @@ if CLIENT then
     importFolder(l"client/modules/*")
 
 
-
+    import(l"client/Derma/Elements/DSleekPanel.lua")
     import(l"client/Derma/Elements/DSleekButton.lua")
     import(l"client/Derma/Elements/DSleekTextbox.lua")  
     import(l"client/Derma/Elements/DSleekScrollbar.lua")
@@ -101,9 +101,9 @@ if CLIENT then
     import(l"client/Derma/Elements/DSleekFileViewer.lua") 
     
      
-    
+    import(l"client/Derma/Elements/BetterLabels.lua")
     importFolder(l"client/Derma/Elements/*")
-    import(l"client/Derma/Editor/UtilPopups.lua")
+    import(l"client/Derma/UtilPopups.lua")
     import(l"client/Derma/Editor/Editor.lua")
     importFolder(l"client/Derma/*") 
     

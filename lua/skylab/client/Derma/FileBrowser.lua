@@ -169,8 +169,6 @@ function filebrowser:ClearPreview()
 end
 
 function filebrowser:Init()
-    self.colors = {}
-
     self.colors.background = Color(55,55,55)
     self.colors.pathbg     =  Color(85,85,85)
     self.colors.buttonsbg  = Color(85,85,85)
@@ -260,7 +258,7 @@ function filebrowser:Init()
             loadLastDir(r)
         end, r)
 
-        b:SetTooltip("Open '" .. r .. "'") 
+        SSLE:Tooltip(b, "Open '" .. r .. "'")
 
         return b 
     end
@@ -280,7 +278,7 @@ function filebrowser:Init()
     -- Searchbar
     local search = vgui.Create("DSleekTextBox", topBar)
     search:SetPlaceholderText("Search...")
-    search:SetTooltip("Search in the selected Directory and Subdirectories")
+    SSLE:Tooltip(search, "Search in the selected Directory and Subdirectories")
     search:Dock(RIGHT)
     search:SetSize(425,0)
     search:DockMargin(0,5,5,0) 
@@ -473,12 +471,13 @@ function filebrowser:Init()
         if not dir or #dir == 0 then return end 
         for id, _ in pairs(SSLE.profiles) do 
             local profile = SSLE.GetProfile(id)
-            if profile.commonDirectories then 
-                for _, directory in pairs(profile.commonDirectories) do 
-                    if directory.root == self.root and string.GetPathFromFilename(dir):find(directory.directory) and profile.defaultContent then 
-                        file.Append(dir, profile.defaultContent)
-                        break
-                    end
+
+            if not profile or not profile.commonDirectories then continue end 
+
+            for _, directory in pairs(profile.commonDirectories) do 
+                if directory.root == self.root and string.GetPathFromFilename(dir):find(directory.directory) and profile.defaultContent then 
+                    file.Append(dir, profile.defaultContent)
+                    break
                 end
             end
         end
@@ -488,7 +487,7 @@ function filebrowser:Init()
     tree.NodeCreated = function(self, node)
         node.Label.DoDoubleClick = function() end -- 2x Click sucks
         node.OnOptionAdded = function(self, menu, option)
-            if option ~= "Open" then return end
+            if option ~= "Open" and option ~= "Close" then return end
 
             local r, d = tree.root, node.directory  
             if not r or not d or string.gsub(d, "[%s/]*", "") == "" then return end 
@@ -542,7 +541,7 @@ function filebrowser:Init()
             node:InternalDoClick() 
             node:DoDoubleClick()
         end
-        
+
         node.DoDoubleClick = function() end 
     end
     
@@ -562,9 +561,11 @@ function filebrowser:Init()
 
         local function addRoot(r)
             if not r or not parent.rootIcons[r] then return end 
+
             local node = root:AddNode(r, parent.rootIcons[r])
             node.Label:SetTextColor(favorites.colors.text)   
             node:SetExpanded(true) 
+
             return node 
         end
 
@@ -610,7 +611,7 @@ function filebrowser:Init()
                 end
 
                 local d = string.Split(node.directory or "", "/") 
-                node:SetTooltip("..." .. d[math.max(#d - 1, 1)] .. "/")
+                SSLE:Tooltip(node, "..." .. d[math.max(#d - 1, 1)] .. "/")
             end
 
             if superNode:GetChildNodeCount() == 0 then 
@@ -643,8 +644,21 @@ function filebrowser:Init()
     local centerpanel = vgui.Create("DPanel")
 
     local list = vgui.Create("DSleekListView", centerpanel)
-    list:SetMultiSelect(false()
+    list:SetMultiSelect(false)
     list:Dock(FILL)
+    list.OnMousePressed = function(self, code)
+        if code == MOUSE_RIGHT then 
+            local tree = parent.tree 
+
+            if tree.root == "DATA" then 
+                local menu = DermaMenu()
+
+                
+
+                menu:Open()
+            end
+        end
+    end
 
     do 
         local n = list:AddColumn("Name")
@@ -755,16 +769,20 @@ function filebrowser:ReloadList(shouldQueue)
 
         files = ((self.tree.fileCache[selectedDir] or {})[1] or {})
 
-        if #files == 0 then 
-            return 
-        end 
+        if #files == 0 then return end 
     end 
 
     for k, v in pairs(files) do
         if not v or string.gsub(v, "%s", "") == "" then continue end 
 
         local s = string.Split(v, ".")
-        local directory = selectedDir .. v
+
+        local directory 
+        if selectedDir ~= self.tree.root then 
+            directory = selectedDir .. v
+        else 
+            directory = v
+        end
 
         local function exec(line)
             if not line then return end 
@@ -786,7 +804,7 @@ function filebrowser:ReloadList(shouldQueue)
                             if not self.directory then return end 
                             file.Delete(self.directory)
                             self:Remove()
-                            super.tree:Reload()
+                            super.tree:Reload(true)
                             super:ReloadList(true)
                         end, SSLE:GetWindow(self))
                     end)  
@@ -950,7 +968,7 @@ function filebrowser:GetDirectory()
     return string.sub(self.directory, 2, #self.directory)
 end
 
-vgui.Register("DSleekFileBrowser", filebrowser, "DPanel")
+vgui.Register("DSleekFileBrowser", filebrowser, "DSleekPanel")
 
 local function checkFilepath(root, dir)
     if not dir then 

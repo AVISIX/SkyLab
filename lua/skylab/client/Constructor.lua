@@ -15,7 +15,7 @@ if not SSLE then
 end 
 
 SSLE.launch = function()
-    SSLE.editor:Open("DATA", "expression2/")
+    SSLE.editor:Open("LUA", "vgui/")
       --  SSLE:OpenBrowser(function()end)
 end
 

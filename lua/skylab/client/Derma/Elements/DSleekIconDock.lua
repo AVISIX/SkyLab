@@ -5,8 +5,6 @@ local function dark(n)
 end
 
 function self:Init()
-    self.colors = {}
-    self.colors.background = dark(45)
     self.colors.buttonsbg  = Color(85,85,85)
 
     self.iconOffset = 7.5
@@ -118,4 +116,4 @@ function self:Paint(w, h)
     addOutline(self.selected, self.colors.buttonsbg)
 end
 
-vgui.Register("DSleekIconDock", self, "DPanel")
+vgui.Register("DSleekIconDock", self, "DSleekPanel")

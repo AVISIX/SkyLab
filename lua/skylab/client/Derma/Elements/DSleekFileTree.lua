@@ -134,6 +134,7 @@ function self:CreateFileNode(parent, filename)
 	fileNode.type = "file"
 	fileNode.filename = filename 
 	fileNode.directory = parent.directory  
+	fileNode.path = parent.directory .. filename 
 	fileNode.root = self.root 
 
 	fileNode.Label:SetTextColor(self.colors.text)
@@ -505,13 +506,11 @@ function self:SetRoot(root, directory)
 				SSLE:TextConfirm("Enter File Name", function(text)
 					if string.gsub(text, "%s", "") == "" then return end 
 
-					local newDir = rn.directory 
+					local newDir = text .. ".txt"
 
-					if newDir == root then 
-						newDir = ""
+					if directory ~= root then 
+						newDir = directory .. newDir 
 					end
-
-					newDir = newDir .. text .. ".txt"
 
 					file.Write(newDir, "")
 
@@ -526,13 +525,11 @@ function self:SetRoot(root, directory)
 				SSLE:TextConfirm("Enter Folder Name", function(text)
 					if string.gsub(text, "%s", "") == "" then return end 
 
-					local newDir = rn.directory 
+					local newDir = text .. "/"
 
-					if newDir == root then 
-						newDir = ""
+					if directory ~= root then 
+						newDir = directory .. newDir 
 					end
-
-					newDir = newDir .. text .. "/"
 
 					file.CreateDir(newDir)
 
@@ -565,9 +562,18 @@ end
 function self:Reload(openLastDirectory)
 	if openLastDirectory == nil then openLastDirectory = true end 
 
-	local lastDir = self:GetSelectedItem().m_bExpanded == true and self:SelectedDirectory() 
+	local lastDir 
+	local sNode = self:GetSelectedNode()
 
-	self:SetRoot(self.root, self.superNode.directory ~= root and self.superNode.directory)
+	if sNode.type == "file" then 
+		sNode = sNode:GetParent()
+	end
+	
+	if sNode.m_bExpanded == true then 
+		lastDir = sNode.directory 
+	end
+
+	self:SetRoot(self.root, self.superNode.directory ~= self.root and self.superNode.directory)
 
 	if openLastDirectory == true and lastDir then 
 		self:OpenDirectory(self.root, lastDir, nil, false, false)
@@ -614,7 +620,7 @@ function self:_SearchFile(root, directory, file, useLCS, ratings, limit)
 	if reachedLimit() == true then return ratings end 
 
 	local function check()
-		local files = self.fileCache[directory][1]
+		local files = (self.fileCache[directory] or {})[1] or {}
 		for _, v in pairs(files) do
 			if not v then continue end 
 			local f = fixFile(v) 

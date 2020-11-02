@@ -18,9 +18,6 @@ local fontbank = {}
 local self = {}
 
 function self:Init()
-	self.colors = {}
-	self.colors.background = dark(50)
-
 	self.colors.infotype   = Color(220,110,0) 
 	self.colors.infodata   = dark(225)
 
@@ -195,4 +192,4 @@ function self:PerformLayout(w, h)
 	end
 end
 
-vgui.Register("DSleekFileInfo", self, "DPanel")
+vgui.Register("DSleekFileInfo", self, "DSleekPanel")

@@ -176,7 +176,7 @@ function syntaxBox:GetSurroundingPairs(char, line)
         while true do    
             if not self.tokens[lnCounter] then 
                -- self.tokens[lnCounter] = self.lexer:ParseLine(lnCounter, self.tokens[lnCounter - 1]) -- super shitty workaround but fuck it
-               self:LexLines(lnCounter, false) 
+               self:LexLine(lnCounter, false) 
                tk = self.tokens[lnCounter]
             end
             if tk then 
@@ -1021,7 +1021,6 @@ function syntaxBox:Init()
     self.textOffset = 2 -- offset after the right line margin
     self.tokenizationLinesLimit = 20000 -- After this amount of lines, tokenization will stop.
 
-    self.colors = {}
     self.colors.editorBG = dark(45)
     self.colors.editorFG = dark(255)
     self.colors.lineNumbersBG = dark(35)
@@ -1040,7 +1039,7 @@ function syntaxBox:Init()
     self.syntax = {}
     self.tokens = {}
 
-    self.lexer = SSLE.modules.lexer 
+    self.lexer = table.Copy(SSLE.modules.lexer)
     self:ResetProfile()
 
     self.caret = {
@@ -1082,6 +1081,7 @@ function syntaxBox:Init()
     self.scrollBar = vgui.Create("DVScrollBar", self)
     self.scrollBar:Dock(RIGHT)
     self.scrollBar.Dragging = false
+    scrollbarOverride(self.scrollBar)
 
     -- TextEntry
     self.textBox = vgui.Create("TextEntry", self)
@@ -1105,7 +1105,6 @@ function syntaxBox:Init()
 
     self.parseTimer = RealTime()
 
-    self.textBox:RequestFocus()
     self:FixCaret()
     self:ResetSelection()
 
@@ -1402,14 +1401,14 @@ end
 function syntaxBox:ParseVisibleLines()
     if not self.lastLines then self.lastLines = {} end 
     for i = self.textPos.line, self.textPos.line + math.ceil(self:GetTall() / self.font.h) - 1, 1 do 
-        if self:LexLine(i, false) == false then break end 
+        self:LexLine(i, true)
     end
 end
 
 function syntaxBox:ParseChangedVisibleLines()
     if not self.lastLines then self.lastLines = {} end 
     for i = self.textPos.line, self.textPos.line + math.ceil(self:GetTall() / self.font.h) - 1, 1 do 
-        if self:LexLine(i) == false then break end 
+        self:LexLine(i) 
     end  
 end
 
@@ -1417,7 +1416,7 @@ function syntaxBox:LexLine(i, lexSameLines)
     if i > self.tokenizationLinesLimit then return false end 
     local line = self.lines[i]
     if not line then return false end
-    lexSameLines = lexSameLines or false 
+    if lexSameLines == nil then lexSameLines = false end 
     if line == self.lastLines[i] and lexSameLines == false then return false end 
     self.tokens[i] = self.lexer:ParseLine(i, self.tokens[i - 1] or nil)
     self.lastLines[i] = line   
@@ -1471,7 +1470,7 @@ function syntaxBox:Goto(char, line)
         goto rep 
     end
 
-    self:ParseChangedVisibleLines()
+    self:ParseVisibleLines()
 end
 
 function syntaxBox:Highlight(start, ending, i, col)
@@ -1559,7 +1558,7 @@ function syntaxBox:_TextChanged()
             if self:HasSelection() == true then 
                 self:FlipSelection()
                 self:RemoveSelectedText()
-                self:ParseChangedVisibleLines()
+                self:ParseVisibleLines()
                 self:FixCaret()
                 self:PasteTextAt(text, self.caret.char, self.caret.line )
             else     
@@ -1616,6 +1615,8 @@ function syntaxBox:_TextChanged()
     self:FixCaret()
     self:Goto(self.caret.char, self.caret.line)
     self.hasChanges = true 
+
+    PrintTable(self.tokens[self.caret.line])
 end
 
 function syntaxBox:FlipSelection()
@@ -2098,6 +2099,8 @@ function syntaxBox:OnMousePressed(code)
 
     self.lastClickPos = table.Copy(self.caret)
     self:Goto(self.caret.char, self.caret.line)
+
+    self.textBox:RequestFocus()
 end
 
 function syntaxBox:_FocusLost()
@@ -2304,6 +2307,8 @@ function syntaxBox:PaintBackground()
 end
 
 function syntaxBox:Paint(w, h)
+    if self:IsVisible() == false then return end 
+
     local vLines = math.ceil(h / self.font.h) - 1
     local vChars = math.ceil(w / self.font.w)
 
@@ -2486,7 +2491,6 @@ function syntaxBox:Paint(w, h)
         end
         
         self:UpdateTabIndicators()
-        self:ParseChangedVisibleLines()
         self:RetimeRematch()
         self.hasChanges = false 
         self:ResetHighlighting()
@@ -2501,6 +2505,8 @@ function syntaxBox:Paint(w, h)
 
         self:RematchPairs()
     end
+
+    self:ParseVisibleLines()
 end
 
 function syntaxBox:OnMouseWheeled(delta)
@@ -2531,7 +2537,7 @@ function syntaxBox:_LinesChanged(a, b)
    -- print(a .. " " ..b )
 end
 
-vgui.Register("DSyntaxBox", syntaxBox, "DPanel")
+vgui.Register("DSyntaxBox", syntaxBox, "DSleekPanel")
 
 
 

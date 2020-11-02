@@ -90,6 +90,7 @@ function textbox:Init()
     self.colors = {}
     
     -- Config --
+    self.colors.outline = dark(70)
     self.colors.background  = dark(45)
     self.colors.foreground  = dark(255)
     self.colors.border      = Color(0,255,255)
@@ -97,7 +98,7 @@ function textbox:Init()
     self.colors.selection   = Color(0,255,0,45)
     self.colors.placeholder = dark(85)
     self.boundsMargin = 1
-    self.borderFadeSpeed = 5
+    self.borderFadeSpeed = 8
     self.textoffset = 5
     ------------
 
@@ -107,6 +108,7 @@ function textbox:Init()
     self.bgfade = 0
     self.text = ""
     self.font = {
+        s = 0,
         w = 0,
         h = 0,
         n = "",
@@ -114,6 +116,8 @@ function textbox:Init()
     }
 
     self.selection = nil 
+
+    self.lastFrame = 0
 
     self.lastText = {"", 0}
     self.lt = ""
@@ -428,6 +432,7 @@ function textbox:SetFont(font, size)
     surface.CreateFont(n, data)
     surface.SetFont(n)
     local w, h  = surface.GetTextSize(" ")
+    self.font.s = size 
     self.font.w  = w
     self.font.h  = h 
     self.font.n  = n 
@@ -615,25 +620,31 @@ function textbox:Paint(w, h)
     -- Background
     draw.RoundedBox(0, 0, 0, w, h, self.colors.background)
 
+    local frameDelay = 1 + (RealTime() - self.lastFrame) * 1.5
+    local fadeSpeed  = self.borderFadeSpeed * frameDelay 
+
+
     -- Border Fade
     do 
         if self.entry:HasFocus() == true then      
             if self.bgfade < 255 then 
-                self.bgfade = self.bgfade + self.borderFadeSpeed
+                self.bgfade = self.bgfade + fadeSpeed
             end
         elseif self:IsHovered() then 
             if self.bgfade < 150 then 
-                self.bgfade = math.min(self.bgfade + self.borderFadeSpeed, 150)
+                self.bgfade = math.min(self.bgfade + fadeSpeed, 150)
             elseif self.bgfade > 150 then 
-                self.bgfade = self.bgfade - self.borderFadeSpeed
+                self.bgfade = self.bgfade - fadeSpeed
             end
         elseif self.bgfade > 0 then 
-            self.bgfade = self.bgfade - self.borderFadeSpeed
+            self.bgfade = self.bgfade - fadeSpeed
         end
         local col = table.Copy(self.colors.border)
         col.a = self.bgfade
         draw.RoundedBox(0,0,0,w,h,col)
     end
+
+    draw.RoundedBox(0,0,0,w,h,oAlpha(self.colors.outline, 255 - self.bgfade))
 
     -- Border Fade overlap
     draw.RoundedBox(0, self.boundsMargin, self.boundsMargin, w - self.boundsMargin * 2, h - self.boundsMargin * 2, self.colors.background)
@@ -652,6 +663,7 @@ function textbox:Paint(w, h)
         draw.RoundedBox(0, self.boundsMargin + self.textoffset, self.boundsMargin, self.font.w * mult, self.font.h, oAlpha(dark(255),10))
    -- end
 
+   self.lastFrame = RealTime()
 end
 
 vgui.Register("DSleekTextBox", textbox, "DPanel")

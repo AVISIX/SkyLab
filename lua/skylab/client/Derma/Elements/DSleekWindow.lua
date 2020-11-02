@@ -116,10 +116,11 @@ end
 
 function window:OnMouseReleased()
 	self.Dragging = nil
+	local wasSizing = self.Sizing 
 	self.Sizing = nil
 	self:MouseCapture( false )
 
-	if self:IsFullScreen() == true then return end 
+	if self:IsFullScreen() == true or wasSizing then return end 
 
 	local mx, my = input.GetCursorPos()
 

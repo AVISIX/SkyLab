@@ -24,8 +24,6 @@ do
     local self = {}
 
     function self:Init()
-        self.colors = {}
-        self.colors.background = dark(50)
         self.colors.outline = dark(120)
 
         self.filepath = ""
@@ -119,9 +117,10 @@ do
             self.preview:SetText(contents)
 
             -- Override functions 
+
             self.preview.PaintCaret = function() end 
             self.preview.OnMousePressed = function() end 
-       --     self.preview.OnMouseWheeled = function() end 
+            self.preview.OnMouseWheeled = function() end 
 
             self.preview.SetCaret = function() end 
             self.preview.CheckAreaSelection = function() end 
@@ -129,7 +128,7 @@ do
             self.preview.StartSelection = function() end 
             self.preview.EndSelection = function() end 
             
-            self.preview._TextChanged = function() end 
+        --    self.preview._TextChanged = function() end 
             self.preview._KeyCodePressed = function() end 
 
             self.preview.scrollBar.Paint = function() end 
@@ -191,5 +190,5 @@ do
         self:SetPreview("","")
     end
 
-    vgui.Register("DSleekFilePreview", self, "DPanel")
+    vgui.Register("DSleekFilePreview", self, "DSleekPanel")
 end

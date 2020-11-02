@@ -77,10 +77,9 @@ B_LAYOUT_NONE = 8
 function button:Init()
     self:SetCursor("hand")
 
-    self.colors = {}
-
     --- Config ---
     self.colors.background = dark(45)
+    self.colors.outline = dark(70)
     self.colors.foreground = dark(255)
     self.colors.border     = Color(0,255,255)
     self.boundsMargin    = 1
@@ -193,13 +192,18 @@ end
 
 function button:SizeToContents()
     local cH = self.font.h 
-    if cH < self.image:GetTall() then 
+
+    if IsValid(self.image) == true and cH < self.image:GetTall() then 
         cH = self.image:GetTall()
     end
 
     local cW
-    if self.imagelayout == B_LAYOUT_NONE then 
-        cW = self.font.w * #self.text 
+    if not self.imagelayout or self.imagelayout == B_LAYOUT_NONE then 
+        if IsValid(self.image) == true then 
+            cW = self.image:GetWide() / 2 
+        else
+            cW = self.font.w * #self.text + self.font.w * 2
+        end 
     else 
         cW = self.font.w * #self.text + self.image:GetWide() / 2 + self.imageSizeOffset * 2 
     end
@@ -208,8 +212,9 @@ function button:SizeToContents()
 end
 
 function button:OnMousePressed(code)
-    self:Pulsate()
     self:OnClick(RealTime() - self.lastClickTiming, code)
+    if code ~= MOUSE_LEFT then return end 
+    self:Pulsate()
     self.lastClickTiming = RealTime()
     self:KillFocus()
 end
@@ -237,6 +242,8 @@ function button:PaintText(w, h)
         elseif self.imagelayout == B_LAYOUT_TOP then 
             textHeight = textHeight - ih 
         end
+    elseif IsValid(self.image) == false then  
+        textWidth = textWidth + self.font.w / 2
     end
 
     local x, y = (w / 2 - textWidth / 2), (h / 2 - textHeight / 2)
@@ -258,7 +265,7 @@ function button:PerformLayout(w, h)
         self.image:SetSize(wh,wh)
 
         if self.imagelayout == B_LAYOUT_NONE then 
-            self.image:SetPos(w / 2 - wh / 2, h / 2 - wh / 2)
+            self.image:SetPos(w / 2 - self.image:GetWide() / 2, h / 2 - self.image:GetTall() / 2)
             return 
         end
 
@@ -289,14 +296,18 @@ function button:PerformLayout(w, h)
 end
 
 function button:Paint(w, h)
+    self.isDown = false 
 
-    local frameDelay = 1 + (RealTime() - self.lastFrame)
+    local frameDelay = 1 + (RealTime() - self.lastFrame) * 1.5
     local fadeSpeed  = self.borderFadeSpeed * frameDelay 
 
     -- Background
     draw.RoundedBox(0, 0, 0, w, h, self.colors.background)
 
     draw.RoundedBox(0,0,0,w,h,oAlpha(self.colors.border, self.bgfade))
+    draw.RoundedBox(0,0,0,w,h,oAlpha(self.colors.outline, 255 - self.bgfade))
+
+    local bFrame = false
 
     if self.pulse[1] == false then 
         if self:HasFocus() == true then      
@@ -317,8 +328,14 @@ function button:Paint(w, h)
             local c = mAll(self.colors.background, self.bgfade / 100)
             draw.RoundedBox(0, self.boundsMargin, self.boundsMargin, w - self.boundsMargin * 2, h - self.boundsMargin * 2, c)
         end
-    else 
-        local y = math.max(curve((RealTime() - self.pulse[2]) * self.clickfadespeed), 0)
+    else
+        local y = 1 
+
+        if input.IsMouseDown(MOUSE_LEFT) == true and self:IsHovered() == true then 
+            self.isDown = true 
+        else 
+            y = math.max(curve((RealTime() - self.pulse[2]) * self.clickfadespeed), 0)
+        end
 
         do 
             local c = mAll(self.colors.background, (self.bgfade / 100))
@@ -328,8 +345,10 @@ function button:Paint(w, h)
         end
 
         if y <= 0 then 
+            self.lastFrame = self.pulse[2]
             self:KillFocus()
             self.pulse[1] = false 
+            bFrame = true
         end
     end 
 
@@ -339,8 +358,15 @@ function button:Paint(w, h)
 
     self:PaintCustom(w, h)
 
+    if bFrame == true then return end 
+
     self.lastFrame = RealTime()
 end
 
-vgui.Register("DSleekButton", button, "DPanel")
+function button:IsDown() 
+    if self.isDown == nil then return false end
+    return self.isDown 
+end 
+
+vgui.Register("DSleekButton", button, "DSleekPanel")
 
