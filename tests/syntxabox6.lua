@@ -159,25 +159,6 @@ function Lexer:SetProfile(profile)
     self.profile = profile 
 end
 
---[[
-            onLineParseStarted = function(i)
-        end,
-
-        onLineParsed = function(result, i)  
-        end,
-
-        onMatched = function(result, i, type, buffer, prevTokens) 
-        end,
-
-        onCaptureStart = function(result, i, type, buffer, prevTokens) 
-        end,
-
-        onCaptureEnd = function(result, i, type, buffer, prevTokens) 
-        end,
-        
-        onTokenSaved = function(result, i, type, buffer, prevTokens) 
-        end
-]]
 function Lexer:ParseRow(text, prevTokens)
     if not self.profile then return end 
     if not text then return end
@@ -193,23 +174,12 @@ function Lexer:ParseRow(text, prevTokens)
     local builder = ""
 
     local capturization = {type = "",group = {}}
-    local function capture(type, group)
-        capturization.type  = type 
-        capturization.group = group 
-    end
-
-    local function inCapture()
-        return capturization.type ~= ""
-    end
-
-    local function stopCapture()
-        capturization.type = ""
-    end
 
     do 
         local lastRealToken = prevTokens[#prevTokens - 1]
         if lastRealToken and lastRealToken.inCapture == true and self.profile.captures[lastRealToken.type] then 
-            capture(lastRealToken.type,  self.profile.captures[lastRealToken.type])
+            capturization.type  = lastRealToken.type 
+            capturization.group = self.profile.captures[lastRealToken.type] 
         end
     end
 
@@ -251,7 +221,7 @@ function Lexer:ParseRow(text, prevTokens)
     local function addToBuilder(text)
         if not text or text == "" then return end 
 
-        if #text > 1 or inCapture() == true then 
+        if #text > 1 or capturization.type ~= "" then 
             builder = builder .. text
             return 
         end  
@@ -310,7 +280,7 @@ function Lexer:ParseRow(text, prevTokens)
     addToBuilder(text[1])
 
     while buffer < #text do  
-        if inCapture() == false then 
+        if capturization.type == "" then 
             if (function() -- Handle Matches (Inside function cause of 'return' being convenient )
                 for k, v in pairs(self.profile.matches) do 
                     local match = readPattern(v.pattern)
@@ -363,7 +333,8 @@ function Lexer:ParseRow(text, prevTokens)
                         builder = match .. text[buffer + ml]
                         buffer = buffer + ml 
 
-                        capture(k, v)
+                        capturization.type  = k 
+                        capturization.group = v 
 
                         self.profile.onCaptureStart(match, text, k, buffer, result)
                         return true 
@@ -394,7 +365,7 @@ function Lexer:ParseRow(text, prevTokens)
 
                     builder = ""
 
-                    stopCapture()
+                    capturization.type = "" 
 
                     self.profile.onCaptureEnd(match, text, t, buffer, result)
 
@@ -407,7 +378,7 @@ function Lexer:ParseRow(text, prevTokens)
     end     
 
     if builder ~= "" then 
-        if inCapture() == true then 
+        if capturization.type ~= "" then 
             addToken(builder, capturization.type, capturization.group.multiline)
         else 
             addRest()  
@@ -820,10 +791,10 @@ do
             comments = 
             {
                 begin = {
-                    pattern = '#%['
+                    pattern = '#%[%+%+'
                 },
                 close = {
-                    pattern = '%]#'
+                    pattern = '%+%+%]#'
                 }
             }
         },
@@ -851,11 +822,11 @@ do
     })
 end 
 
-local r = Lexer:ParseText([[#[addToken
+local r = Lexer:ParseText([[#[++addToken
 bb 
 cc 
-dd]#
-
+dd++]#
+#[++++++]#
 "aa
 bb
 cc"]], {})
