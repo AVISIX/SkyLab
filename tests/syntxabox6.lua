@@ -29,14 +29,14 @@ Lexer.configdefault = {
     unreserved = {},
     closingPairs = {},
 
-    indentation = table.Copy(SixLexer.meta.indentingdefault),
+    indentation = table.Copy(Lexer.indentingdefault),
 
     autoPairing = {},
 
-    matches = table.Copy(SixLexer.meta.matchesdefault),
+    matches = table.Copy(Lexer.matchesdefault),
     captures = {},
 
-    colors = table.Copy(SixLexer.meta.colorsdefault),
+    colors = table.Copy(Lexer.colorsdefault),
 
     onLineParsed = function() end,
     onLineParseStarted = function() end,
@@ -63,6 +63,8 @@ function Lexer:SetProfile(profile)
         -- Set Default Validation 
         if not ap.validation then ap.validation = function() return true end end  
     end
+
+    if not profile.colors then profile.colors = {} end 
 
     -- Matching default configurations setting 
     for k, v in pairs(profile.matches) do 
@@ -132,7 +134,7 @@ function Lexer:SetProfile(profile)
         end 
 
         -- Set Default Multiline 
-        if not capture.multiline then 
+        if capture.multiline == nil then 
             capture.multiline = true 
         end 
 
@@ -157,174 +159,705 @@ function Lexer:SetProfile(profile)
     self.profile = profile 
 end
 
+--[[
+            onLineParseStarted = function(i)
+        end,
 
-function Lexer:ParseText(text, prevTokens)
+        onLineParsed = function(result, i)  
+        end,
+
+        onMatched = function(result, i, type, buffer, prevTokens) 
+        end,
+
+        onCaptureStart = function(result, i, type, buffer, prevTokens) 
+        end,
+
+        onCaptureEnd = function(result, i, type, buffer, prevTokens) 
+        end,
+        
+        onTokenSaved = function(result, i, type, buffer, prevTokens) 
+        end
+]]
+function Lexer:ParseRow(text, prevTokens)
     if not self.profile then return end 
     if not text then return end
-    
+
+    self.profile.onLineParseStarted(text)
+
+    text = string.gsub(text, "\n.*", "") -- \n will break this function, so dont allow it
+
     prevTokens = prevTokens or {}
 
     local result = {}
-    local buffer = 0
-    local capture = {type = "",group = {}}
+    local buffer = 1
     local builder = ""
 
+    local capturization = {type = "",group = {}}
     local function capture(type, group)
-        capture.type  = type 
-        capture.group = group 
+        capturization.type  = type 
+        capturization.group = group 
     end
 
     local function inCapture()
-        return capture.type ~= ""
+        return capturization.type ~= ""
     end
 
     local function stopCapture()
-        capture.type = ""
+        capturization.type = ""
     end
 
     do 
         local lastRealToken = prevTokens[#prevTokens - 1]
-        if lastRealToken and lastRealToken.inCapture == true and profile.captures[lastRealToken.type] then 
-            capture(lastRealToken.type,  profile.captures[lastRealToken.type])
+        if lastRealToken and lastRealToken.inCapture == true and self.profile.captures[lastRealToken.type] then 
+            capture(lastRealToken.type,  self.profile.captures[lastRealToken.type])
         end
     end
 
-    local lastToken = {}
-    local function addToken(text, type, inCapture)
-        if not text then return end 
-        if string.gsub(text, "%s", "") == "" and type ~= "endofline" then return end  
+    local function addToken(t, type, inCapture)
+        if not t then return end 
+ 
+        local tokenStart = ((result[#result] or {}).ending or 0) + 1  
 
-        local tokenStart = 1 
-
-        if lastToken.ending then 
-            tokenStart = lastToken.ending + 1 
-        end
-
-        local token = {
-            text   = text,
-            type   = type or "error",
-            start  = tokenStart,
-            ending = tokenStart + #text,
+        table.insert(result, {
+            text = t,
+            type = type or "error",
+            start = tokenStart,
+            ending = tokenStart + #t - 1,
             inCapture = inCapture
-        }
+        })
 
-        result[#result + 1] = token 
+        local lt = result[#result] 
 
-        lastToken = token 
+        self.profile.onTokenSaved(lt, text, lt.type, buffer, result)
 
-        return token 
+        return lt
     end
 
-    local function addRest(fallback)
+    local function addRest()
         if builder == "" then return end 
-        addToken(builder, fallback or "error")
+        addToken(builder, "error")
         builder = ""
     end
 
-    local function addToBuilder(text, fallback)
-        if not text or text == "\n" or string.gsub(text, "%s", "") == "" then return end 
+    local function extendLastToken(type, text)
+        if builder == "" and (result[#result] or {}).type == type then 
+            result[#result].text = result[#result].text .. text 
+            result[#result].ending = result[#result].ending + #text 
+            return true 
+        end
+        return false 
+    end
 
-        if #text > 1 then 
+    local function addToBuilder(text)
+        if not text or text == "" then return end 
+
+        if #text > 1 or inCapture() == true then 
             builder = builder .. text
             return 
         end  
 
-        fallback = fallback or "error"
+        for k, v in pairs(self.profile.reserved) do
+            if v[text] then 
+                if extendLastToken(k, text) == true then return end -- We do this to not add useless new Tokens. Just add the data to the old token, if its the same type 
 
-        for key, chars in pairs(self.profile.reserved) do 
-            for _, char in pairs(chars) do 
-                if char == text then
-                    addRest(fallback)
-                    addToken(text, key)
-                    return
-                end 
-            end
-        end
-
-        for key, pairs in pairs(self.config.closingPairs) do 
-            if str == pairs[1] or str == pairs[2] then 
-                addRest(fallbach)
-                addToken(text, key)
+                addRest()
+                addToken(text, k)
+                
                 return 
             end
         end
-        
+
+        for k, v in pairs(self.profile.closingPairs) do 
+            if v[text] then 
+                if extendLastToken(k, text) == true then return end 
+
+                addRest()
+                addToken(text, k)
+
+                return 
+            end
+        end
+
+        if self.profile.unreserved[text] then 
+            if extendLastToken("unreserved", text) == true then return end 
+
+            addRest()
+            addToken(text, "unreserved")
+
+            return 
+        end
+
         builder = builder .. text
     end 
 
     -- Dont use this 
-    local function readSinglePattern(pattern)
-        if not pattern then return end 
+    local function readPattern(pattern)
+        if not pattern then return nil end 
         
         local a,b,c = string.find(text, pattern, buffer)
 
-        if not a or not b then return end 
+        if not a or not b or a ~= buffer then return nil end 
 
         return c or string.sub(text, a, b) 
     end 
 
-    local function readMultiPattern(pattern)
-        if not pattern then return end 
-        
-        local matches = {string.match(text, pattern, buffer)}
-
-        if #matches == 0 then 
-            matches[1] = matches[1] or readSinglePattern(pattern)
-        end
-
-        return matches
-     end
-
-    local function isNextPattern(pattern)
-        if not pattern then return end 
-
-        local a,b,c = string.find(text, pattern, buffer)
-
-        if a and b or (c or "") ~= "" then return true end 
-
-        return false 
-    end
-
     local function readNext()
         buffer = buffer + 1
-        return text[#buffer] or "\n"
+        return text[buffer] or ""
     end
 
-    local char = readNext()
-    while buffer < #text then    
-        if char == "\n" then 
-            if inCapture() == true then 
-                
-            end
-            break 
-        end
-        
-        if inCapture() == false then 
-            if function()
+    local char = ""
+    addToBuilder(text[1])
 
+    while buffer < #text do  
+        if inCapture() == false then 
+            if (function() -- Handle Matches (Inside function cause of 'return' being convenient )
+                for k, v in pairs(self.profile.matches) do 
+                    local match = readPattern(v.pattern)
+                    
+                    if not match then continue end
+
+                    local val = v.validation(text, buffer, match, #result, result) or false 
+
+                    if type(val) == "string" then 
+                        k = val
+                        val = true 
+                    end 
+
+                    if val == true then
+                        if #result == 1 and match[1] == text[1] then result[1] = nil end
+
+                        addToken(match, k)
+
+                        buffer = buffer + #match 
+                        builder = ""
+
+                        self.profile.onMatched(match, text, k, buffer, result)
+
+                        return true 
+                    end 
+                end
 
                 return false 
-            end == true then continue end 
+            end)() == true then 
+                addToBuilder(text[buffer] or "")
+                continue 
+            end 
 
-            local function handleCapture()
+            if (function() -- Handle Captures 
+                for k, v in pairs(self.profile.captures) do 
+                    local match = readPattern(v.begin.pattern)
 
-            end
-            if handleCapture() == true then continue end 
-        
-            char = readNext()
-            addToBuilder(char)
+                    if not match then continue end 
+
+                    local val = v.begin.validation(text, buffer, match, #result, result)
+
+                    if type(val) == "string" then 
+                        k = val
+                        val = true 
+                    end 
+
+                    if val == true then  
+                        local ml = #match 
+
+                        builder = match .. text[buffer + ml]
+                        buffer = buffer + ml 
+
+                        capture(k, v)
+
+                        self.profile.onCaptureStart(match, text, k, buffer, result)
+                        return true 
+                    end
+                end
+
+                return false 
+            end)() == true 
+            then 
+                continue 
+            end 
+
+            addToBuilder(readNext())
         else
+            local t = capturization.type 
+            local g = capturization.group 
 
+            local match = readPattern(g.close.pattern)
+
+            if match then 
+                local val = g.close.validation(text, buffer, match, #result, result)
+
+                if val == true then 
+                    buffer = buffer + #match 
+                    builder = builder .. string.sub(match, 2, #match) 
+
+                    addToken(builder, t)
+
+                    builder = ""
+
+                    stopCapture()
+
+                    self.profile.onCaptureEnd(match, text, t, buffer, result)
+
+                    continue 
+                end 
+            end
+
+            addToBuilder(readNext())
         end
     end     
 
-    if result[#result].type ~= "endofline" then
+    if builder ~= "" then 
+        if inCapture() == true then 
+            addToken(builder, capturization.type, capturization.group.multiline)
+        else 
+            addRest()  
+        end
+    end 
+
+    if ((result[#result] or {}).type or "") ~= "endofline" then
         addToken("", "endofline")
     end 
+
+    self.profile.onLineParsed(result, text)
 
     return result
 end
 
-function Lexer:ParseLine(t, pt)
-    return self:ParseText(t, pt)
+function Lexer:ParseText(t)
+    t = t or ""
+    
+    local result = {}
+
+    for k, v in pairs(string.Split(t, "\n")) do 
+        if not v then break end 
+        table.insert(result, self:ParseRow(v, result[#result]))
+    end
+
+    return result 
 end
+
+function Lexer:ParseLine(t, pt)
+    return self:ParseRow(t, pt)
+end
+
+do 
+    --[[
+        Lua Syntax Profile
+
+        Author: Sixmax
+        Contact: sixmax@gmx.de
+
+        Copyright, all rights reserved
+
+        License: CC BY-NC-ND 3.0
+        Licensed to Team Skylon (Sixmax & Evaneos[KOWAR])
+    ]]
+
+    local keywords = {
+        ["if"]       = 1,
+        ["else"]     = 1,
+        ["elseif"]   = 1,
+        ["while"]    = 1,
+        ["for"]      = 1,
+        ["foreach"]  = 1,
+        ["switch"]   = 1,
+        ["case"]     = 1,
+        ["break"]    = 1,
+        ["default"]  = 1,
+        ["continue"] = 1,
+        ["return"]   = 1,
+        ["local"]    = 1,
+        ["function"] = 1
+    }
+    
+    local function isUpper(char)  
+        if not char or char == "" then return false end 
+        local n = string.byte(char)
+        return n >= 65 and n <= 90 
+    end
+    
+    local function isLower(char)  
+        if not char or char == "" then return false end 
+        local n = string.byte(char)
+        return n >= 97 and n <= 122 
+    end
+    
+    local function isNumber(char) 
+        if not char or char == "" then return false end 
+        local n = string.byte(char)
+        return n >= 48 and n <= 57 
+    end
+    
+    local function isSpecial(char)
+        return isNumber(char) == false and isLower(char) == false and isUpper(char) == false 
+    end 
+    
+    local E2Cache = {}
+    
+    Lexer:SetProfile({
+        language = "Expression 2",
+        filetype = "txt",
+        commonDirectories = 
+        {
+            {
+                root = "DATA",
+                directory = "e2files"
+            },
+            {
+                root = "DATA",
+                directory = "expression2"
+            }
+        },
+        reserved = 
+        {
+            operators = 
+            {
+                ["+"]=1,
+                ["-"]=1,
+                ["/"]=1,
+                ["|"]=1,
+                ["<"]=1,
+                [">"]=1,
+                ["="]=1,
+                ["*"]=1,
+                ["?"]=1,
+                ["$"]=1,
+                ["!"]=1,
+                [":"]=1,
+                ["&"]=1,
+                ["%"]=1,
+                ["~"]=1,
+                [","]=1, 
+                ["^"]=1
+            },
+
+            others = 
+            {
+                ["."]=1, 
+                [";"]=1
+            }
+        },
+        indentation = 
+        {
+            open = {"{", "%(", "%["},
+            close = {"}", "%)", "%]"},
+            offsets = {
+                ["#ifdef"] = false, 
+                ["#else"] = false,    
+                ["#endif"] = false 
+            }
+        },
+        autoPairing =
+        {
+            {
+                word = "{",
+                pair = "}",
+                validation = function() return true end     
+            },
+            {
+                word = "(",
+                pair = ")",
+                validation = function() return true end 
+            },
+            {
+                word = "[",
+                pair = "]",
+                validation = function(line, charIndex, lineIndex)  
+                    return (line[charIndex - 1] or "") ~= "#"
+                end 
+            },
+            {
+                word = '"',
+                pair = '"',
+                validation = function(line, charIndex, lineIndex)  
+                    return (line[charIndex - 1] or "") ~= '"'
+                end 
+            },
+            {
+                word = "#[", 
+                pair = "]#",
+                validation = function() return true end 
+            },
+        },
+        unreserved = 
+        {
+            ["_"] = 1,
+            ["@"] = 1
+        },
+        closingPairs = 
+        {
+            scopes = 
+            {
+                ["{"]=1, 
+                ["}"]=1
+            },
+            parenthesis = 
+            {
+                ["("]=1, 
+                [")"]=1
+            },
+            propertyAccessors = 
+            {
+                ["["]=1, 
+                ["]"]=1
+            }
+        },
+        matches = 
+        {   
+            preprocDirective = 
+            {
+                pattern = "^@[^ ]*",
+                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex, triggerOther)
+                    if result == "@persist" 
+                    or result == "@inputs" 
+                    or result == "@outputs"
+                    or result == "@autoupdate" then 
+                        return true 
+                    end
+                    return false 
+                end
+            },
+            preprocLine =
+            {
+                pattern = "^@[^\n]*",
+                validation = function(line, buffer, result, tokenIndex, tokens)  
+                    local _, _, txt = string.find(line, "^(@[^ ]*)")
+                    if txt == "@name" 
+                    or txt == "@trigger" 
+                    or txt == "@model" then 
+                        return true 
+                    end
+                    return false 
+                end
+            },
+            variables = 
+            {
+                pattern     = "[A-Z][a-zA-Z0-9_]*",
+                validation = function(line, buffer, result, tokenIndex, tokens) 
+                    return isSpecial(line[buffer - 1]) == true 
+                end,
+            },
+            keywords = 
+            {
+                pattern = "[a-z][a-zA-Z0-9_]*",
+                validation = function(line, buffer, result, tokenIndex, tokens) 
+                    if not line then return false end 
+                    if result == "function" then 
+                        local _,_,str = string.find(line, "^%s*([^ ]*)", 1)
+                        if str ~= "function" then return false end 
+                    end
+                    return keywords[result] and isSpecial(line[buffer - 1]) == true
+                end
+            },
+            userfunctions = 
+            {
+                pattern = "[a-z][a-zA-Z0-9_]*",
+                validation = function(line, buffer, result, tokenIndex, tokens) 
+                    if keywords[result] then 
+                        return false 
+                    end
+
+                    local function getPrevToken(index)
+                        return tokens[tokenIndex - index] or {}
+                    end
+                    --[[
+                                            function someFunction()     
+                                    function someType:someFunction()
+                                    function someType someFunction()
+                        function someType someType:someFunction()
+                           5    4    3   2    1   0
+                    ]]
+
+                    local res = false 
+                    if getPrevToken(1).text == "function" or getPrevToken(3).text == "function" or getPrevToken(5).text == "function" then 
+                        res = true 
+                    end
+
+                    return res == true and line[buffer + #result] == "(" and isSpecial(line[buffer - 1]) == true 
+                end,
+                reparseOnChange = true 
+            },
+            builtinFunctions = 
+            {
+                pattern = "[a-z][a-zA-Z0-9_]*",
+                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex, tot) 
+                    if keywords[result] then 
+                        return false 
+                    end
+
+                    for i, lineCache in pairs(E2Cache) do -- Need cache for every line so if something cached gets removed it can be updated
+                        if i > lineIndex then continue end 
+                        if lineCache.userfunctions and lineCache.userfunctions[result] then 
+                            return "userfunctions" 
+                        end
+                    end 
+
+                    local extraCheck = true 
+                    if E2Lib then 
+                        if not wire_expression2_funclist[result] then 
+                            extraCheck = false 
+                        end
+                    end
+
+                    local function nextChar(char)
+                        return line[buffer + #result] == char  
+                    end
+
+                    return nextChar("(") and extraCheck and isSpecial(line[buffer - 1]) == true 
+                end
+            },
+            types = 
+            {
+                pattern = "[a-z][a-zA-Z0-9_]*",
+                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex, tOther) 
+                    if keywords[result] then 
+                        return false 
+                    end
+
+                    local function nextChar(char)
+                        return line[buffer + #result] == char  
+                    end
+                    
+                    local extraCheck = true  
+
+                    if E2Lib then 
+                        local function istype(tp)
+                            return wire_expression_types[tp:upper()] or tp == "number" or tp == "void"
+                        end
+                        extraCheck = istype(result)
+                        if extraCheck == false then 
+                            if wire_expression2_funclist[result] and isSpecial(line[buffer - 1]) == true then 
+                                return "builtinFunctions" 
+                            end
+                        end
+                    end
+
+                    return (nextChar("]") or nextChar(" ") or nextChar(":") or nextChar("=") or nextChar(",") or nextChar("") or nextChar(")")) and extraCheck and isSpecial(line[buffer - 1]) == true 
+                end
+            },
+            includeDirective = 
+            {
+                pattern = "#include",
+                validation = function(line, buffer, result, tokenIndex, tokens) 
+                    return line[buffer + #result] == " "
+                end
+            },
+            ppcommands = 
+            {
+                pattern = "#[a-z]+",
+                validation = function(line, buffer, result, tokenIndex, tokens) 
+                    local res = result == "#ifdef" 
+                                or result == "#else" 
+                                or result == "#endif" 
+
+                    return res 
+                end
+            },
+            constants = 
+            {
+                pattern = "_[A-Z][A-Z_0-9]*",
+                validation = function(line, buffer, result, tokenIndex, tokens) 
+                    if E2Lib then 
+                        return wire_expression2_constants[result] ~= nil 
+                    end
+                    return true  
+                end
+            },
+            lineComment = 
+            {
+                pattern = "#[^\n]*",
+                validation = function(line, buffer, result, tokenIndex, tokens) 
+                    local _, _, txt = string.find(result, "(#[^ ]*)")
+                    if txt == "#ifdef" 
+                    or txt == "#include"
+                    or txt == "#else" 
+                    or txt == "#endif"
+                    or string.sub(txt, 1, 2) == "#[" then return false end 
+                    return true 
+                end
+            },
+            decimals = 
+            {
+                pattern = "[0-9][0-9.e]*",
+                validation = function(line, buffer, result, tokenIndex, tokens) 
+                    local function nextChar(char)
+                        return line[buffer + #result] == char  
+                    end
+
+                    if nextChar("x") or nextChar("b") then return false end 
+
+                    return true 
+                end
+            },
+            hexadecimals = 
+            {
+                pattern = "0[xb][0-9A-F]+"
+            }
+        },
+        captures = 
+        {
+            strings = 
+            {
+                begin = {
+                    pattern = '"'
+                },
+                close = {
+                    pattern = '"',
+                    validation = function(line, buffer, result, tokenIndex, tokens) 
+                        local stepper = 0
+                        local prevChar = line[buffer - 1 - stepper] or ""
+
+                        while prevChar == "\\" do 
+                            stepper = stepper + 1
+                            prevChar = line[buffer - 1 - stepper]
+                        end
+
+                        return stepper == 0 or stepper % 2 == 0   
+                    end
+                },
+                multiline = true
+            },
+            comments = 
+            {
+                begin = {
+                    pattern = '#%['
+                },
+                close = {
+                    pattern = '%]#'
+                }
+            }
+        },
+        colors =
+        {
+
+        },
+        onLineParseStarted = function(i)
+        end,
+
+        onLineParsed = function(result, i)  
+        end,
+
+        onMatched = function(result, i, type, buffer, prevTokens) 
+        end,
+
+        onCaptureStart = function(result, i, type, buffer, prevTokens) 
+        end,
+
+        onCaptureEnd = function(result, i, type, buffer, prevTokens) 
+        end,
+        
+        onTokenSaved = function(result, i, type, buffer, prevTokens) 
+        end
+    })
+end 
+
+local r = Lexer:ParseText([[#[addToken
+bb 
+cc 
+dd]#
+
+"aa
+bb
+cc"]], {})
+
+PrintTable(r)
