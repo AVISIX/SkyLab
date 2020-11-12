@@ -1,18 +1,22 @@
-local Lexer = {}
-Lexer.__index = Lexer
+local DataContext = {}
+DataContext.__index = DataContext
 
-Lexer.matchesdefault = {
+DataContext.defaultLines = {}
+DataContext.context = {}
+DataContext.defaultText = ""
+
+DataContext.matchesdefault = {
     whitespace = {
         pattern = "%s+"
     }
 }
 
-Lexer.colorsdefault = {
+DataContext.colorsdefault = {
     error = Color(255,0,0),
     whitespace = Color(255,255,255)
 }
 
-Lexer.indentingdefault = {
+DataContext.indentingdefault = {
     open = {},
     close = {},
     openValidation = function() return true end,
@@ -20,7 +24,7 @@ Lexer.indentingdefault = {
     offsets = {}
 }
 
-Lexer.configdefault = {
+DataContext.configdefault = {
     language = "Plain",
 
     filetype = ".txt",
@@ -28,15 +32,18 @@ Lexer.configdefault = {
     reserved = {},
     unreserved = {},
     closingPairs = {},
-
-    indentation = table.Copy(Lexer.indentingdefault),
+    folding = {
+        open = {},
+        close = {}
+    },
+    indentation = table.Copy(DataContext.indentingdefault),
 
     autoPairing = {},
 
-    matches = table.Copy(Lexer.matchesdefault),
+    matches = table.Copy(DataContext.matchesdefault),
     captures = {},
 
-    colors = table.Copy(Lexer.colorsdefault),
+    colors = table.Copy(DataContext.colorsdefault),
 
     onLineParsed = function() end,
     onLineParseStarted = function() end,
@@ -45,7 +52,7 @@ Lexer.configdefault = {
     onTokenSaved = function() end 
 }
 
-function Lexer:SetProfile(profile)
+function DataContext:SetRulesProfile(profile)
     if not profile then return end 
 
     setmetatable(profile, {__index = profile.configdefault})
@@ -156,16 +163,36 @@ function Lexer:SetProfile(profile)
         profile.colors.whitespace = Color(255,255,255)
     end
 
-    self.profile = profile 
+    -- Since its more efficient to do {["myValue"] = 1} than {"myValue"} we use this Function to swap the key and value, since its nicer to write but more efficent 
+    local function swapNumericKeysWithStringValues(t) 
+        local result = {}
+        for k, v in pairs(t) do 
+            if type(v) == "table" then 
+                result[k] = swapNumericKeysWithStringValues(v)
+            elseif type(k) == "number" and type(v) == "string" then 
+                result[v] = 1
+            else 
+                result[k] = v 
+            end
+        end
+        return result 
+    end
+
+    self.profile = swapNumericKeysWithStringValues(profile) 
 end
 
-function Lexer:ParseRow(text, prevTokens)
-    if not self.profile then return end 
-    if not text then return end
+-- This Function does the whole Lexing Process (Only 1 line at a time)
+function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
+    if not self.profile then return {} end 
+    if not lineNumber then return {} end
 
-    self.profile.onLineParseStarted(text)
+    local text = self.defaultLines[lineNumber] 
 
-    text = string.gsub(text, "\n.*", "") -- \n will break this function, so dont allow it
+    if not text then return {} end  
+
+    if extendExistingTokens == nil then extendExistingTokens = false end 
+
+    self.profile.onLineParseStarted(lineNumber, text)
 
     prevTokens = prevTokens or {}
 
@@ -175,7 +202,7 @@ function Lexer:ParseRow(text, prevTokens)
 
     local capturization = {type = "",group = {}}
 
-    do 
+    do -- Check if the last line was in a capture, to continue the capture of the last line
         local lastRealToken = prevTokens[#prevTokens - 1]
         if lastRealToken and lastRealToken.inCapture == true and self.profile.captures[lastRealToken.type] then 
             capturization.type  = lastRealToken.type 
@@ -183,6 +210,7 @@ function Lexer:ParseRow(text, prevTokens)
         end
     end
 
+    -- Save a token to the current token context
     local function addToken(t, type, inCapture)
         if not t then return end 
  
@@ -190,6 +218,7 @@ function Lexer:ParseRow(text, prevTokens)
 
         table.insert(result, {
             text = t,
+            line = lineNumber, 
             type = type or "error",
             start = tokenStart,
             ending = tokenStart + #t - 1,
@@ -198,11 +227,14 @@ function Lexer:ParseRow(text, prevTokens)
 
         local lt = result[#result] 
 
-        self.profile.onTokenSaved(lt, text, lt.type, buffer, result)
+        lt.index = #result 
+
+        self.profile.onTokenSaved(lt, lineNumber, lt.type, buffer, result)
 
         return lt
     end
 
+    -- Add the leftovers as error to the token context
     local function addRest()
         if builder == "" then return end 
         addToken(builder, "error")
@@ -210,11 +242,15 @@ function Lexer:ParseRow(text, prevTokens)
     end
 
     local function extendLastToken(type, text)
+        if extendExistingTokens == false then return false end 
+
         if builder == "" and (result[#result] or {}).type == type then 
             result[#result].text = result[#result].text .. text 
             result[#result].ending = result[#result].ending + #text 
+
             return true 
         end
+
         return false 
     end
 
@@ -238,7 +274,7 @@ function Lexer:ParseRow(text, prevTokens)
         end
 
         for k, v in pairs(self.profile.closingPairs) do 
-            if v[text] then 
+            if v.open == text or v.close == text then 
                 if extendLastToken(k, text) == true then return end 
 
                 addRest()
@@ -257,18 +293,14 @@ function Lexer:ParseRow(text, prevTokens)
             return 
         end
 
-        builder = builder .. text
+        addToken(text, "error")
     end 
 
-    -- Dont use this 
     local function readPattern(pattern)
         if not pattern then return nil end 
-        
         local a,b,c = string.find(text, pattern, buffer)
-
         if not a or not b or a ~= buffer then return nil end 
-
-        return c or string.sub(text, a, b) 
+        return c or string.sub(text, a, b)
     end 
 
     local function readNext()
@@ -287,7 +319,7 @@ function Lexer:ParseRow(text, prevTokens)
                     
                     if not match then continue end
 
-                    local val = v.validation(text, buffer, match, #result, result) or false 
+                    local val = v.validation(text, buffer, match, #result, result, lineNumber) or false 
 
                     if type(val) == "string" then 
                         k = val
@@ -302,7 +334,7 @@ function Lexer:ParseRow(text, prevTokens)
                         buffer = buffer + #match 
                         builder = ""
 
-                        self.profile.onMatched(match, text, k, buffer, result)
+                        self.profile.onMatched(match, lineNumber, k, buffer, result)
 
                         return true 
                     end 
@@ -320,7 +352,7 @@ function Lexer:ParseRow(text, prevTokens)
 
                     if not match then continue end 
 
-                    local val = v.begin.validation(text, buffer, match, #result, result)
+                    local val = v.begin.validation(text, buffer, match, #result, result, lineNumber)
 
                     if type(val) == "string" then 
                         k = val
@@ -336,26 +368,23 @@ function Lexer:ParseRow(text, prevTokens)
                         capturization.type  = k 
                         capturization.group = v 
 
-                        self.profile.onCaptureStart(match, text, k, buffer, result)
+                        self.profile.onCaptureStart(match, lineNumber, k, buffer, result)
                         return true 
                     end
                 end
 
                 return false 
             end)() == true 
-            then 
-                continue 
-            end 
+            then continue end 
 
             addToBuilder(readNext())
         else
-            local t = capturization.type 
-            local g = capturization.group 
+            local t, g = capturization.type, capturization.group 
 
             local match = readPattern(g.close.pattern)
 
             if match then 
-                local val = g.close.validation(text, buffer, match, #result, result)
+                local val = g.close.validation(text, buffer, match, #result, result, lineNumber)
 
                 if val == true then 
                     buffer = buffer + #match 
@@ -367,7 +396,7 @@ function Lexer:ParseRow(text, prevTokens)
 
                     capturization.type = "" 
 
-                    self.profile.onCaptureEnd(match, text, t, buffer, result)
+                    self.profile.onCaptureEnd(match, lineNumber, t, buffer, result)
 
                     continue 
                 end 
@@ -394,35 +423,220 @@ function Lexer:ParseRow(text, prevTokens)
     return result
 end
 
-function Lexer:ParseText(t)
-    t = t or ""
-    
-    local result = {}
+--[[
+    Available Rules:
+        - noCarriage -> Will replace every carriage return with "    "
+]]
 
-    for k, v in pairs(string.Split(t, "\n")) do 
-        if not v then break end 
-        table.insert(result, self:ParseRow(v, result[#result]))
+function DataContext:CountIndentation(tokens, tokenCallback)
+    if not tokens or #tokens == 0 then return end 
+
+    tokenCallback = tokenCallback or function() end 
+
+    local level = 0
+
+    local openFound   = false 
+    local closeFound  = false 
+    local offsetFound = false 
+
+    for _, token in pairs(tokens) do 
+        if not token then break end 
+
+        tokenCallback(token)
+
+        -- Indenting 
+        if openFound == false then 
+            local open = self.profile.indentation.open[token.text]
+            if open ~= nil then 
+                openFound = true 
+
+                if type(open) == "boolean" then 
+                    level = 0 
+                    continue 
+                end
+
+                level = level + open
+            end 
+        end 
+        
+        if closeFound == false then 
+            local close = self.profile.indentation.close[token.text]            
+            if close ~= nil then 
+                closeFound = true 
+
+                if type(close) == "boolean" then 
+                    level = 0 
+                    continue 
+                end
+                
+                level = level - close
+            end 
+        end 
+        
+        -- Offsets
+        if offsetFound == false then 
+            local offsets = self.profile.indentation.offsets[token.text]
+            if offsets ~= nil then 
+                offsetFound = true 
+                temp.offset = offsets 
+            end
+        end 
     end
 
-    return result 
+    return level  
 end
 
-function Lexer:ParseLine(t, pt)
-    return self:ParseRow(t, pt)
+function DataContext:GetInitialFoldingAvailability()
+    local openers = self.profile.folding.open 
+    local closers = self.profile.folding.close 
+
+    if not openers or not closers then return end 
+
+    local function findMatchDown(tokenIndex, lineIndex)
+        if not self.context[lineIndex] then return end 
+        if not self.context[lineIndex].tokens then return end 
+        if not self.context[lineIndex].tokens[tokenIndex] then return end 
+
+        local function prog()
+            tokenIndex = tokenIndex + 1
+
+            if tokenIndex > #self.context[lineIndex].tokens then 
+
+                tokenIndex = 1
+                lineIndex = lineIndex + 1
+
+                if lineIndex > #self.context then return nil end 
+            end
+
+            return self.context[lineIndex].tokens[tokenIndex] 
+        end
+
+        local curToken = prog()
+        local counter = 1 
+
+        while curToken do    
+            if openers[curToken.text] then 
+                counter = counter + 1
+            elseif closers[curToken.text] then  
+                counter = counter - 1
+            end
+
+            if counter == 0 then break end
+            
+            curToken = prog()
+        end
+
+        return curToken, tokenIndex, lineIndex
+    end
+
+    for lineIndex, contextLine in pairs(self.context) do 
+        if contextLine.folding then continue end -- Skip the ones that have already been parsed 
+
+        for tokenIndex, token in pairs(contextLine.tokens or {}) do 
+            if not token then break end 
+
+            if openers[token.text] then
+                local match, ti, li = findMatchDown(tokenIndex, lineIndex)
+
+                if not match then continue end 
+
+                local diff = li - lineIndex - 1
+
+                if li ~= lineIndex and diff ~= 0 then 
+                    self.context[lineIndex].folding = 
+                    {
+                        folded = false, 
+                        availableFolds = diff,
+                        lastFold = lineIndex + diff 
+                    }
+                end
+            end
+        end
+    end 
+end
+
+function DataContext:ConstructContextLine(i)
+    if not i then return {} end 
+
+    self.defaultLines[i] = string.gsub(self.defaultLines[i], "\r", "    ")
+
+    local lastContextLine = self.context[i - 1] or {}
+
+    local temp = {}
+
+    temp.index  = i 
+    temp.text   = self.defaultLines[i] 
+    temp.tokens = self:ParseRow(i, (lastContextLine.tokens or {}))
+    temp.offset = 0 
+
+    local level = lastContextLine.level 
+
+    if level == nil then level = 0 end 
+
+    if type(level) ~= "number" then 
+        if type(level) == "boolean" then 
+            level = 0
+        else 
+            local c = 2
+            local lc = getPrevContext(c)
+
+            while (lc.level or true) == false do  
+                lc = getPrevContext(c)
+                c = c + 1
+            end
+
+            level = lc.level or 0 
+        end 
+    end
+
+    local countedLevel = self:CountIndentation(temp.tokens)
+
+    temp.nextLineIndentationOffsetModifier = countedLevel + (lastContextLine.nextLineIndentationOffsetModifier or 0)
+    temp.level = math.max((lastContextLine.nextLineIndentationOffsetModifier or 0) + math.min(countedLevel, 0), 0)
+
+    return temp 
+end
+
+function DataContext:SetContext(text, rules)
+    if not text then return end 
+
+    rules = rules or ""
+
+    if type(text) == "table" then 
+        self.defaultLines = text 
+    elseif type(text) == "string" then     
+        self.defaultLines = string.Split(text, "\n")
+    else return end 
+
+    self.context = {}
+
+    local level = 0
+
+    for i, line in pairs(self.defaultLines) do 
+        if not line then break end 
+        table.insert(self.context, self:ConstructContextLine(i))
+    end
+
+    self:GetInitialFoldingAvailability()
+
+    return self.context 
+end
+
+function DataContext:InsertLine(text, i)
+    i = i or #self.defaultLines
+    i = math.Clamp(i, 1, #self.defaultLines)
+    table.insert(self.lines, text, i)
+    table.insert(self.context, self:ConstructContextLine(i), i)
+end
+
+function DataContext:RemoveLine(i)
+    i = i or #self.defaultLines
+    i = math.Clamp(i, 1, #self.defaultLines)
+    table.remove(self.lines, i)
+    table.remove(self.context, i)
 end
 
 do 
-    --[[
-        Lua Syntax Profile
-
-        Author: Sixmax
-        Contact: sixmax@gmx.de
-
-        Copyright, all rights reserved
-
-        License: CC BY-NC-ND 3.0
-        Licensed to Team Skylon (Sixmax & Evaneos[KOWAR])
-    ]]
 
     local keywords = {
         ["if"]       = 1,
@@ -465,7 +679,7 @@ do
     
     local E2Cache = {}
     
-    Lexer:SetProfile({
+    DataContext:SetRulesProfile({
         language = "Expression 2",
         filetype = "txt",
         commonDirectories = 
@@ -481,8 +695,7 @@ do
         },
         reserved = 
         {
-            operators = 
-            {
+            operators = {
                 ["+"]=1,
                 ["-"]=1,
                 ["/"]=1,
@@ -498,11 +711,10 @@ do
                 ["&"]=1,
                 ["%"]=1,
                 ["~"]=1,
-                [","]=1, 
+                ",",
                 ["^"]=1
             },
-
-            others = 
+            others =
             {
                 ["."]=1, 
                 [";"]=1
@@ -510,12 +722,39 @@ do
         },
         indentation = 
         {
-            open = {"{", "%(", "%["},
-            close = {"}", "%)", "%]"},
+            open = {
+                ["{"]=1, 
+                ["%("]=1, 
+                ["%["]=1
+            },
+
+            close = {
+                ["}"]=1, 
+                ["%)"]=1, 
+                ["%]"]=1
+            },
+
             offsets = {
                 ["#ifdef"] = false, 
                 ["#else"] = false,    
                 ["#endif"] = false 
+            }
+        },
+        folding = 
+        {
+            open =
+            {
+                "(",
+                "{",
+                "[",
+                "#ifdef"
+            },
+            close = 
+            {
+                ")",
+                "}",
+                "]",
+                "#endif"
             }
         },
         autoPairing =
@@ -557,24 +796,23 @@ do
         },
         closingPairs = 
         {
-            scopes = 
-            {
-                ["{"]=1, 
-                ["}"]=1
+            scopes = {
+                open = "{",
+                close = "}"
             },
             parenthesis = 
             {
-                ["("]=1, 
-                [")"]=1
+                open = "(",
+                close = ")"
             },
             propertyAccessors = 
             {
-                ["["]=1, 
-                ["]"]=1
+                open = "[",
+                close = "]"
             }
         },
         matches = 
-        {   
+        {
             preprocDirective = 
             {
                 pattern = "^@[^ ]*",
@@ -785,30 +1023,34 @@ do
 
                         return stepper == 0 or stepper % 2 == 0   
                     end
-                },
-                multiline = true
+                }
             },
             comments = 
             {
                 begin = {
-                    pattern = '#%[%+%+'
+                    pattern = '#%['
                 },
                 close = {
-                    pattern = '%+%+%]#'
+                    pattern = '%]#'
                 }
             }
         },
-        colors =
-        {
 
-        },
         onLineParseStarted = function(i)
+            E2Cache[i] = {}
         end,
 
         onLineParsed = function(result, i)  
+
         end,
 
         onMatched = function(result, i, type, buffer, prevTokens) 
+            if type == "userfunctions" then 
+                if not E2Cache[i] then E2Cache[i] = {} end 
+                if not E2Cache[i][type] then E2Cache[i][type] = {} end 
+                if not E2Cache[i][type][result] then E2Cache[i][type][result] = 0 end 
+                E2Cache[i][type][result] = E2Cache[i][type][result] + 1
+            end
         end,
 
         onCaptureStart = function(result, i, type, buffer, prevTokens) 
@@ -818,17 +1060,52 @@ do
         end,
         
         onTokenSaved = function(result, i, type, buffer, prevTokens) 
-        end
-    })
+        end,
+
+        colors = 
+        {
+            preprocDirective = Color(240,240,160),
+            preprocLine      = Color(240,240,160),
+            operators        = Color(255,255,255),
+            scopes           = Color(255,255,255),
+            parenthesis      = Color(255,255,255),
+            strings          = Color(150,150,150),
+            comments         = Color(128,128,128),
+            lineComment      = Color(128,128,128),
+            variables        = Color(160,240,160),
+            decimals         = Color(247,167,167),
+            hexadecimals     = Color(247,167,167),
+            keywords         = Color(160,240,240),
+            includeDirective = Color(160,240,240),
+            builtinFunctions = Color(160,160,240),  
+            userfunctions    = Color(102,122,102),
+            types            = Color(240,160,96),
+            constants        = Color(240,160,240),
+            ppcommands       = Color(240,96,240),
+            error            = Color(241,96,96),
+            others           = Color(241,96,96)
+        }})
 end 
 
-local r = Lexer:ParseText([[#[++addToken
-bb 
-cc 
-dd++]#
-#[++++++]#
-"aa
-bb
-cc"]], {})
+local r = DataContext:SetContext([[for(I=1,12){
+    {
+        xd 
+        {{{{
+            a 
+        }}}}
+    }}
+}
+    ]])
 
 PrintTable(r)
+
+--[[
+local test 
+
+do 
+    local myTab = {a = "yourMom", b = "fat"} 
+    test = myTab 
+    test.b = nil 
+
+    PrintTable(myTab)
+end ]] 
