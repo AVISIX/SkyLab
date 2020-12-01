@@ -696,7 +696,7 @@ function DataContext:ConstructContextLine(i)
 
     local temp = {}
 
-    temp.index = i --(self.context[i] or {}).index or i  
+    temp.index = i
     temp.text   = self.defaultLines[i] 
     temp.tokens = self:ParseRow(i, (lastContextLine.tokens or {}))
 
@@ -818,7 +818,6 @@ end
 local prof = {}
 
 do 
-
     local keywords = {
         ["if"]       = 1,
         ["else"]     = 1,
@@ -1350,6 +1349,7 @@ function self:Init()
     self.colors.tabIndicators = Color(175,175,175,35)
     self.colors.currentLine = dark(200,10)
     self.colors.foldingIndicator = dark(175,35)
+    self.colors.foldingAreaIndicator = Color(100,150,180, 25)
 
     self.tabSize = 5
 
@@ -1358,7 +1358,8 @@ function self:Init()
         x = 0,
         y = 0, 
         char = 1,
-        line = 1
+        line = 1,
+        actualLine = 1
     }
 
     self.selection = {
@@ -1397,6 +1398,8 @@ function self:Init()
     self.undo = {}
     self.redo = {}
 
+    self.lastCode = 0x0
+
     self.data = table.Copy(DataContext)
 
     self.data.FoldingAvailbilityCheckStarted = function() 
@@ -1432,6 +1435,13 @@ function self:Init()
 
             if #super.folding.folds == 0 then  
                 _:SetIcon("icon16/connect.png")
+                
+                local limit = line + self.data.context[line].folding.available
+
+                if self.caret.line > line and self.caret.line <= limit then 
+                    self:SetCaret(self.caret.char, limit + 1) -- if the caret is inside an area that is being folded, push it the fuck out of there xoxoxo
+                end
+
                 self.data:FoldLine(line)
             else 
                 _:SetIcon("icon16/disconnect.png")
@@ -1484,23 +1494,19 @@ function self:CollectBadButtons()
             if v.super then 
                 v.super.button = nil 
             end
+
             self.foldButtons[k] = nil 
+
             continue 
         elseif IsValid(v) == true and not v.super then 
+
             v:Remove()
             self.foldButtons[k] = nil 
+
             continue 
         end
         v:SetVisible(false) 
     end
-end
-
-function self:Fold(n)
-    self.data:FoldLine(n)
-end
-
-function self:Unfold(n)
-    self.data:UnfoldLine(n)
 end
 
 function self:GetLine(i)
@@ -1537,6 +1543,8 @@ function self:_KeyCodeReleased(code)
 end
 
 function self:_KeyCodePressed(code)
+    self.lastCode = code 
+
     if code == KEY_DOWN then
         self:SetCaret(self.caret.char, self.caret.line + 1)
     elseif code == KEY_UP then
@@ -1690,7 +1698,6 @@ end
 
 function self:KeyForIndex(index)
     for k, v in pairs(self.data.context) do 
-        if not v.index then break end 
         if v.index ~= index then continue end 
         return k 
     end 
@@ -1706,24 +1713,24 @@ function self:SetCaret(...)
 
     local char, line = select(1, ...), select(2, ...)
 
-    local lineDiff = line - self.caret.line 
+    local actualLine = self:KeyForIndex(line)
 
-    local actualLine  = self:KeyForIndex(line)
-    print(line .. " " .. (actualLine or "bruh"))
     if not actualLine then 
-        if line <= 1 or line > #self.data.context then return end
-        if lineDiff < 0 then 
-            line = self.data.context[self:KeyForIndex(self.caret.line) - 1]
-        else 
-            line = self.data.context[self:KeyForIndex(self.caret.line) + 1]
-        end
-        actualLine = self.data.context[line].index 
-        print(line)
-    end 
+        local last = self.caret.actualLine
+        
+        if self.lastCode == KEY_UP or self.lastCode == KEY_RIGHT then 
+            actualLine = last - 1
+        elseif self.lastCode == KEY_DOWN or self.lastCode == KEY_LEFT then   
+            actualLine = last + 1
+        end 
 
-    if not line then return end 
+        actualLine = math.Clamp(actualLine, 1, #self.data.context)
 
-    self.caret.line = line 
+        line = self.data.context[actualLine].index
+    end
+
+    self.caret.line = math.max(line, 1)
+    self.caret.actualLine = actualLine -- We save this to avoid shitty loops all over the place 
     self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
 
     self:CaretSet(char, line)
@@ -1800,6 +1807,10 @@ function self:Paint(w, h)
             cLine.button:SetSize(offset * 0.75, cLine.button:GetWide())
             cLine.button:SetVisible((mx > 0 and mx <= textoffset + x) or #cLine.folding.folds > 0)
             cLine.button:SetPos(x - offset + offset * 0.15, c * self.font.h + (self.font.h / 2 - cLine.button:GetTall() / 2))
+
+            if cLine.button:IsHovered() == true and #cLine.folding.folds == 0 then -- Folding Area Indicator
+                draw.RoundedBox(0,x, (c + 1) * self.font.h, w, cLine.folding.available * self.font.h, self.colors.foldingAreaIndicator)
+            end
         end 
 
         -- Line Numbers 
@@ -1955,10 +1966,10 @@ foreach(I, Ply:entity = players())
     if(Ply:aimEntity() != owner())
     { 
         if(Viewers[Name, number]) # If he was looking at you, remove the holo 
-        {
+  aa      {aa
             holoDelete(Viewers[Name, number])
             Viewers:removeNumber(Name)           
-        }
+   aa     }aa
         continue 
     } # If hes not looking at you, go next 
     
@@ -1971,8 +1982,8 @@ foreach(I, Ply:entity = players())
 }
 
 
-
-]])
+aaaaaaaaa
+aaaaaaaaaaaaaaaadddddddddddddds]])
 
  -- PrintTable(sb.data.context)
 end
