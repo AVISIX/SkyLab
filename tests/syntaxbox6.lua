@@ -615,6 +615,18 @@ function DataContext:GetGlobalFoldingAvailability()
     self:FoldingAvailbilityCheckCompleted()
 end
 
+function DataContext:CountFolds(line)
+    if not line or not line.folding or not line.folding.folds or #line.folding.folds == 0 then return 0 end 
+    local r = #line.folding.folds 
+
+    for k, v in ipairs(line.folding.folds) do 
+        if not v.folding or not v.folding.folds then continue end 
+        r = r + #v.folding.folds 
+    end
+
+    return r 
+end
+
 function DataContext:FoldLine(i)
     if i == nil then return end 
 
@@ -631,7 +643,7 @@ function DataContext:FoldLine(i)
         table.insert(t.folding.folds, line)
 
         if line.folding and #line.folding.folds > 0 then 
-            n = n + #line.folding.folds + 1 -- We need to skip the lines that have already been folded so we dont go out of the folding bounds 
+            n = n + self:CountFolds(line) + 1 -- We need to skip the lines that have already been folded so we dont go out of the folding bounds 
         else 
             n = n + 1
         end 
@@ -1269,8 +1281,6 @@ do
         DataContext:SetRulesProfile(prof)
 end 
 
-
-
 --[[
     local r = DataContext:SetContext([[@name Codeviewer - V2
 
@@ -1330,6 +1340,10 @@ local function dark(n,a)
     return Color(n,n,n,a)
 end
 
+local function isFolding(line)
+    return line and line.folding and line.folding.folds and #line.folding.folds > 0 
+end
+
 local self = {}
 
 local offset = 25 
@@ -1352,7 +1366,6 @@ function self:Init()
     self.colors.foldingAreaIndicator = Color(100,150,180, 25)
 
     self.tabSize = 5
-
 
     self.caret = {
         x = 0,
@@ -1438,11 +1451,11 @@ function self:Init()
                 
                 local limit = line + self.data.context[line].folding.available
 
+                self.data:FoldLine(line)
+
                 if self.caret.line > line and self.caret.line <= limit then 
                     self:SetCaret(self.caret.char, limit + 1) -- if the caret is inside an area that is being folded, push it the fuck out of there xoxoxo
                 end
-
-                self.data:FoldLine(line)
             else 
                 _:SetIcon("icon16/disconnect.png")
                 self.data:UnfoldLine(line)
@@ -1709,9 +1722,11 @@ end
 
 function self:CaretSet(char, line) end 
 function self:SetCaret(...)
-    if #{...} ~= 2 then return end 
+    if #{...} < 3 then return end 
 
-    local char, line = select(1, ...), select(2, ...)
+    local char, line, swapOnReach = select(1, ...), select(2, ...), select(3, ...)
+
+    if swapOnReach == nil then swapOnReach = false end 
 
     local actualLine = self:KeyForIndex(line)
 
@@ -1722,7 +1737,7 @@ function self:SetCaret(...)
             actualLine = last - 1
         elseif self.lastCode == KEY_DOWN or self.lastCode == KEY_LEFT then   
             actualLine = last + 1
-        end 
+        else return end  
 
         actualLine = math.Clamp(actualLine, 1, #self.data.context)
 
@@ -1731,7 +1746,18 @@ function self:SetCaret(...)
 
     self.caret.line = math.max(line, 1)
     self.caret.actualLine = actualLine -- We save this to avoid shitty loops all over the place 
-    self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
+
+    if swapOnReach == false then 
+        self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
+    else
+        if char > #self.data.context[actualLine].text then 
+            
+        elseif char < 0 then 
+
+        else
+
+        end
+    end
 
     self:CaretSet(char, line)
 
@@ -1773,7 +1799,7 @@ function self:PaintAfter(w, h) end
 function self:Paint(w, h)
     self:PaintBefore(w, h)
 
-    local i = self.textPos.line 
+    local i = self. textPos.line 
 
     local mx, my = self:LocalCursorPos()
 
@@ -1796,8 +1822,7 @@ function self:Paint(w, h)
     draw.RoundedBox(0, x, 0, 1, h, self.colors.linesEditorDivider)
 
     local bruh = 1
-    while i < self.textPos.line + visLines
-    do 
+    while i < self.textPos.line + visLines do 
         if bruh > #self.data.context * 2 then print("COCK") break end bruh = bruh + 1 
 
         local cLine = self.data.context[i]
@@ -1809,7 +1834,22 @@ function self:Paint(w, h)
             cLine.button:SetPos(x - offset + offset * 0.15, c * self.font.h + (self.font.h / 2 - cLine.button:GetTall() / 2))
 
             if cLine.button:IsHovered() == true and #cLine.folding.folds == 0 then -- Folding Area Indicator
-                draw.RoundedBox(0,x, (c + 1) * self.font.h, w, cLine.folding.available * self.font.h, self.colors.foldingAreaIndicator)
+
+                local counter = i 
+                local n = c
+
+                while counter < i + cLine.folding.available do 
+
+                    if isFolding(self.data.context[counter]) == true then 
+                        counter = counter + self.data.context[counter].folding.available 
+                        continue 
+                    end  
+
+                    draw.RoundedBox(0,x, (n + 1) * self.font.h, w, self.font.h, self.colors.foldingAreaIndicator)
+ 
+                    counter = counter + 1
+                    n = n + 1
+                end
             end
         end 
 
@@ -1858,7 +1898,7 @@ function self:Paint(w, h)
             end 
         end 
 
-        if cLine.folding and cLine.folding.folds and #cLine.folding.folds > 0 then 
+        if isFolding(cLine) == true then 
             draw.RoundedBox(0, 0, (c + 1) * self.font.h, self:GetWide(), 1, self.colors.foldingIndicator)
         end
 
@@ -1984,8 +2024,6 @@ foreach(I, Ply:entity = players())
 
 aaaaaaaaa
 aaaaaaaaaaaaaaaadddddddddddddds]])
-
- -- PrintTable(sb.data.context)
 end
 
 concommand.Add("sopen", function( ply, cmd, args )
