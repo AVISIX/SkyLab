@@ -2061,6 +2061,8 @@ function self:GetCaretTabRegion()
     local history = {}
     local lastTabs = 0
 
+    local lastLine = 0
+
     for line, tabs in pairs(self.allTabs) do
 
         if tabs == lastTabs then continue end 
@@ -2068,18 +2070,30 @@ function self:GetCaretTabRegion()
         if tabs > lastTabs then 
             table.insert(history, line)
         elseif tabs < lastTabs then 
-            local startLine = history[#history] - 1
+            local startLine = history[#history] 
 
-            if startLine <= self.caret.actualLine and line >= self.caret.actualLine then 
-                self.caretRegion = {startLine, line, #history - 1}
-                break 
-            end 
-
-            table.remove(history)
+            if startLine then 
+                startLine = startLine - 1
+                if startLine <= self.caret.actualLine and line >= self.caret.actualLine then 
+                    self.caretRegion = {startLine, line, #history - 1}
+                    return  
+                end 
+            
+                table.remove(history)
+            end
         end
 
         lastTabs = tabs 
+        lastLine = line 
     end
+
+    local last = history[#history - 1]
+
+    if not last then return end 
+
+    self.caretRegion = {last - 1, lastLine, #history}
+
+    PrintTable(self.caretRegion)
 end
 
 function self:GetTabLevels()
@@ -2358,6 +2372,8 @@ function self:Paint(w, h)
 
                     if posX < 0 then continue end 
 
+                  --  print(cLine.index .. " >=  " .. self.caretRegion[1] .. " || " .. cLine.index .. " <= " .. self.caretRegion[2])
+
                     draw.RoundedBox(0, x + posX, c * self.font.h, 1, self.font.h, (cLine.index >= self.caretRegion[1] and cLine.index <= self.caretRegion[2] and n - 1 == self.caretRegion[3]) and self.colors.caretAreaTabIndicator or self.colors.tabIndicators)
                 end
             end
@@ -2500,7 +2516,7 @@ while(1)
         
         
         ]])
- --   sb:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
+    sb:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
 end
 
 concommand.Add("sopen", function( ply, cmd, args )
