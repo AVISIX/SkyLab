@@ -61,6 +61,20 @@ DataContext.configdefault = {
     Notes:
         - When closing the editor, save the folds in the sqlite db and save the timestamp. if the file was edited after that specific timestamp, reset the folds to unfolded 
 ]]
+local function lastRecursiveEntry(collection)
+    if not collection then return {}, 0 end 
+
+    local skips = #collection 
+    local result = collection[#collection]
+
+    while result.folding and #result.folding.folds > 0 do
+        local len = #result.folding.folds 
+        skips = skips + len 
+        result = result.folding.folds[len]
+    end
+
+    return result, skips  
+end
 
 function DataContext:LineConstructed() end 
 function DataContext:LineConstructionStarted() end 
@@ -210,11 +224,11 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
     if not self.profile then return {} end 
     if not lineNumber then return {} end
 
-    local text = self.defaultLines[lineNumber] 
+    local text = type(extendExistingTokens) ~= "string" and self.defaultLines[lineNumber] or extendExistingTokens
 
     if not text then return {} end  
 
-    if extendExistingTokens == nil then extendExistingTokens = false end 
+    if extendExistingTokens == nil or type(extendExistingTokens) ~= "boolean" then extendExistingTokens = false end 
 
     self.profile.onLineParseStarted(lineNumber, text)
 
@@ -411,13 +425,11 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
 
     until buffer > #text 
 
-    if builder ~= "" then 
-        if capturization.type ~= "" then 
-            addToken(builder, capturization.type, capturization.group.multiline)
-        else 
-            addRest()  
-        end
-    end 
+    if capturization.type ~= "" then 
+        addToken(builder, capturization.type, capturization.group.multiline)
+    else 
+        addRest()  
+    end
 
     if ((result[#result] or {}).type or "") ~= "endofline" then
         addToken("", "endofline")
@@ -440,7 +452,7 @@ function DataContext:CountIndentation(tokens, tokenCallback)
     local closeFound  = false 
     local offsetFound = false 
 
-    for _, token in pairs(tokens) do 
+    for _, token in ipairs(tokens) do 
         if not token then break end 
 
         tokenCallback(token)
@@ -513,6 +525,8 @@ function DataContext:FindMatchDown(tokenIndex, lineIndex)
     local counter = 1 
 
     while true do    
+        if not curToken then break end 
+
         if openers[curToken.text] then 
             counter = counter + 1
         elseif closers[curToken.text] then  
@@ -525,6 +539,72 @@ function DataContext:FindMatchDown(tokenIndex, lineIndex)
     end
 
     return curToken, tokenIndex, lineIndex
+end
+
+local function getLeftLen(str)
+    if not str then return 0 end 
+    local _,_,r = string.find(str, "^(%s*)")
+    return #r or 0
+end
+
+function DataContext:SmartFolding(startLine) -- Uses Whitespace differences to detect folding
+    if not self.context[startLine] then return end 
+
+    local function peekNextFilledLine(start, minLen)
+        start = start + 1
+        while self.context[start] and (string.gsub((self.context[start] or {}).text or "", "%s", "") == "") do  
+            if minLen and getLeftLen(self.context[start].text) < minLen then break end 
+            start = start + 1
+        end
+        return self.context[start], start
+    end
+
+    if string.gsub(self.context[startLine].text, "%s", "") == "" then return end 
+
+    local startLeft = getLeftLen(self.context[startLine].text)               
+    local nextLeft  = getLeftLen((self.context[startLine + 1] or {}).text)     
+
+    if nextLeft <= startLeft then -- If its smaller, then check if its a whitespace line, if yes, skip all of them until the first filled comes up, then check again.
+        local nextFilled, lookup = peekNextFilledLine(startLine, nextLeft)
+
+        if lookup - 1 == startLine then return end 
+
+        startLine = lookup
+        nextLeft = getLeftLen((self.context[startLine] or {}).text)     
+    
+        if nextLeft <= startLeft then return end 
+    end 
+    
+    do
+        local c = startLine - 1
+        local prev = self.context[c]
+        while prev and string.gsub(prev.text, "%s", "") == "" do  
+            c = c - 1
+            prev = self.context[c]
+        end
+        if getLeftLen((prev or {}).text or "") > nextLeft then return end 
+    end
+
+    startLine = startLine + 2 
+
+    -- uwu so many while luwps howpfuwwy it doewsnt fwuck up x3 (may god have mercy with my soul)
+
+    while true do
+        if not self.context[startLine] then return startLine - 2 end 
+        
+        local currentLeft = getLeftLen(self.context[startLine].text) 
+
+        if currentLeft < nextLeft then 
+            local nextReal = peekNextFilledLine(startLine)
+            if not nextReal or (nextReal.text ~= "" and getLeftLen(nextReal.text) < nextLeft) then 
+                return startLine - 2
+            end  
+        end 
+
+        startLine = startLine + 1
+    end
+
+    return startLine
 end
 
 function DataContext:FindMatchUp(tokenIndex, lineIndex)
@@ -555,6 +635,8 @@ function DataContext:FindMatchUp(tokenIndex, lineIndex)
     local counter = 1 
 
     while curToken do    
+        if not curToken then break end 
+
         if openers[curToken.text] then 
             counter = counter + 1
         elseif closers[curToken.text] then  
@@ -569,47 +651,41 @@ function DataContext:FindMatchUp(tokenIndex, lineIndex)
     return curToken, tokenIndex, lineIndex
 end 
 
+function DataContext:RefreshFoldingForLine(lineIndex, trigger)
+    if not lineIndex then return false end 
+    local line = self.context[lineIndex]
+    if not line then return false end 
+    if line.folding and #line.folding.folds > 0 then return false end 
+
+    if trigger == nil then trigger = true end 
+
+    local endline = self:SmartFolding(lineIndex)
+
+    if endline then 
+        diff = endline - lineIndex + 1
+
+        if diff ~= 0 then 
+            self.context[lineIndex].folding = {
+                available = diff,
+                folds = {}
+            }
+
+            if trigger == true then 
+                self:FoldingAvailbilityFound(lineIndex, diff)
+            end 
+
+            return true 
+        end 
+    end
+
+    return false 
+end
+
 function DataContext:GetGlobalFoldingAvailability()
-    local openers = self.profile.folding.open 
-    local closers = self.profile.folding.close 
-
-    if not openers or not closers then return end 
-
     self:FoldingAvailbilityCheckStarted()
 
     for lineIndex, contextLine in pairs(self.context) do 
-        if not contextLine.tokens then continue end -- Skip the ones that have already been parsed 
-
-        if contextLine.folding and contextLine.folding.folded == true then continue end 
-
-        local canFold = false 
-
-        for tokenIndex, token in pairs(contextLine.tokens) do 
-            if not token then break end 
-
-            if openers[token.text] then
-                local match, ti, li = self:FindMatchDown(tokenIndex, lineIndex)
-
-                if not match then continue end 
-            
-                local diff = li - lineIndex - 1
-
-                if li ~= lineIndex and diff ~= 0 then 
-                    self.context[lineIndex].folding = {
-                        available = diff,
-                        folds = {}
-                    }
-
-                    self:FoldingAvailbilityFound(lineIndex, diff)
-
-                    canFold = true 
-                end 
-            end
-        end
-
-        if contextLine.folding and canFold == false then 
-            self.context[lineIndex].folding = nil -- Remove it when the line is no longer fold-able 
-        end
+        self:RefreshFoldingForLine(lineIndex)
     end
 
     self:FoldingAvailbilityCheckCompleted()
@@ -633,49 +709,72 @@ function DataContext:FoldLine(i)
     if i < 1 or i > #self.context then return end 
     local t = self.context[i]
 
-    if not t.folding then return end
-    
-    local n = i + 1
+    if not t.folding or self:IsFolding(t) == true then return end 
 
-    while n < i + t.folding.available + 1 do 
-        local line = self.context[i + 1]
+    self:RefreshFoldingForLine(i, false)
 
-        table.insert(t.folding.folds, line)
+    for n = i + 1, i + t.folding.available, 1 do 
+        local v = self.context[n]
+        if v.button then v.button:SetVisible(false) end 
+        table.insert(t.folding.folds, v)
+    end
 
-        if line.folding and #line.folding.folds > 0 then 
-            n = n + self:CountFolds(line) + 1 -- We need to skip the lines that have already been folded so we dont go out of the folding bounds 
-        else 
-            n = n + 1
-        end 
-
+    for n = 1, t.folding.available, 1 do 
         table.remove(self.context, i + 1)
     end
 
-    self:LineFolded(i)
-    self:LineFolded(match)
+    self:FixIndeces()
+
+    self:LineFolded(i, t.folding.available)
+end
+
+function DataContext:FixIndeces() -- Extremely important function to keep the line indeces in line 
+    local c = 1
+
+    local function recursiveFix(entry)
+        for k, v in pairs(entry) do 
+            entry[k].index = c 
+            c = c + 1
+            if v.folding and v.folding.folds then 
+                recursiveFix(v.folding.folds)
+            end
+        end
+    end
+
+    recursiveFix(self.context)
 end
 
 function DataContext:UnfoldLine(i)
-    if i == nil then return end 
+    if i == nil then return 0 end 
 
-    if i < 1 or i > #self.context then return end 
+    if i < 1 or i > #self.context then return 0 end 
     local t = self.context[i]
-    if not t.folding then return end
+    if not t or not t.folding or self:IsFolding(t) == false then return 0 end 
+
+    local fc = self:GetFoldCount(i)
 
     for l, v in pairs(t.folding.folds) do 
+        if v.button then v.button:SetVisible(false) end 
         table.insert(self.context, i + l, v)
     end
 
+    local len = #t.folding.folds 
+
     t.folding.folds = {}
 
-    self:LineUnfolded(i)
-    self:LineUnfolded(match)
+    self:FixIndeces()
+
+    self:RefreshFoldingForLine(i, false)
+
+    self:LineUnfolded(i, len)
+
+    return fc
 end
 
 local function constructTextFromTokens(t) 
     if not t then return {} end 
     local r = ""
-    for _, v in pairs(t) do 
+    for _, v in ipairs(t) do 
         if not v.text then break end 
         r = r .. v.text 
     end
@@ -685,7 +784,7 @@ end
 function DataContext:TrimRight(i)
     if i == nil then return end     
 
-    local line = self.context[i]
+    local line = type(i) == "table" and i or self.context[i]
     if not line then return end 
 
     local tokens = line.tokens 
@@ -704,11 +803,25 @@ function DataContext:ConstructContextLine(i)
 
     self.defaultLines[i] = string.gsub(self.defaultLines[i], "\r", "    ") -- Fuck this shit i legit cannot be asked...
 
-    local lastContextLine = self.context[i - 1] or {}
+    local prev = self.context[i - 1]
+
+    local lastContextLine = prev or {}
+
+    if prev and prev.folding and #prev.folding.folds > 0 then 
+        lastContextLine = lastRecursiveEntry(prev.folding.folds) or self.context[i - 1]
+    end
 
     local temp = {}
 
-    temp.index = i
+    do 
+        local index = i 
+
+        if lastContextLine.index then 
+            index = (lastContextLine.index or 1) + (self:GetFoldCount(i - 1) or 0) + 1
+        end
+
+        temp.index = index 
+    end 
     temp.text   = self.defaultLines[i] 
     temp.tokens = self:ParseRow(i, (lastContextLine.tokens or {}))
 
@@ -756,7 +869,7 @@ function DataContext:SetContext(text)
 
     self.context = {}
 
-    for i, line in pairs(self.defaultLines) do 
+    for i, line in ipairs(self.defaultLines) do 
         if not line then break end 
         table.insert(self.context, self:ConstructContextLine(i))
         self:TrimRight(i)
@@ -767,64 +880,157 @@ function DataContext:SetContext(text)
     return self.context 
 end
 
-function DataContext:InsertLine(text, i)
-    i = i or #self.defaultLines
-    i = math.Clamp(i, 1, #self.defaultLines)
+function DataContext:GetFoldCount(i)
+    if not i then return 0 end 
+    if not self.context[i] then return 0 end 
+    if not self.context[i].folding or (self.context[i].folding and self.context[i].folding.folds == 0) then return 0 end  
+    return self.context[i].folding.available
+end
 
-    table.insert(self.defaultLines, text, i)
-    table.insert(self.context, self:ConstructContextLine(i))
+function DataContext:IsFolding(i)
+    line = (type(i) == "table" and i or self.context[i])
+    if not line then return false end 
+    return line and line.folding and line.folding.folds and #line.folding.folds > 0 
+end
 
-    for n = i + 1, #self.context, 1 do 
-        self.context[n].index = self.context[n].index + 1 -- shift up 
+function DataContext:ValidateFoldingAvailability(i, trigger)
+    if not self.context[i] then return false end 
+
+    if trigger == nil then trigger = true end 
+
+    local endline = self:SmartFolding(i)
+
+    if self.context[i].folding then -- If already has been detected as a foldable line, check if its REALLY foldable. if yes, check if the new foldable data is same or not 
+        local function wipe()
+            self:UnfoldLine(i)
+            if self.context[i].button then 
+                self.context[i].button:Remove()
+            end 
+            self.context[i].folding = nil    
+        end
+
+        if not endline then 
+            wipe()
+            return false 
+        end 
+
+        local avFolds = endline - i + 1 
+
+        if avFolds == 0 then 
+            wipe()
+            return false 
+        elseif avFolds ~= self.context[i].folding.available then 
+            self:UnfoldLine(i)
+            self.context[i].folding.available = avFolds
+            return false 
+        end
+
+        return true  
+    elseif endline then -- It has not yet been detected as foldable but is foldable, make it one!
+        self.context[i].folding = {
+            available = avFolds,
+            folds = {}
+        }
+
+        if trigger == true then 
+            self:FoldingAvailbilityFound(i, avFolds)
+        end 
+
+        return true 
+    end 
+
+    return false  
+end
+
+function DataContext:FixFolding(i)
+    self:FoldingAvailbilityCheckStarted()
+
+    while self.context[i] do  
+        if self.context[i].folding then  
+            self:RefreshFoldingForLine(i)
+            break 
+        end 
+        i = i - 1
     end
+end
 
-    self:GetGlobalFoldingAvailability()
+function DataContext:InsertLine(i, text)
+    i = i or #self.defaultLines
+    i = math.max(i, 1)
+
+    table.insert(self.defaultLines, i, text)
+    table.insert(self.context, math.min(i, #self.defaultLines), self:ConstructContextLine(i))
+
+    self:FixIndeces()
+
+    self:FixFolding(i)
 end
 
 function DataContext:RemoveLine(i)
     i = i or #self.defaultLines
     i = math.Clamp(i, 1, #self.defaultLines)
 
-    self:CheckPrevLine(i)
-
     table.remove(self.defaultLines, i)
     table.remove(self.context, i)
 
-    for n = i, #self.context, 1 do 
-        self.context[n].index = self.context[n].index - 1 -- shift down
-    end
+    self:FixIndeces()
 
-    self:GetGlobalFoldingAvailability()
-end
+    self:FixFolding(i)
 
-function DataContext:CheckPrevLine(i)
-    if self.context[i - 1] and self.context[i - 1].folding and #self.context[i - 1].folding.folds > 0 then 
-        self:UnfoldLine(i - 1)
-    end
+    return i 
 end
 
 function DataContext:OverrideLine(i, text)
     if i <= 0 or i > #self.defaultLines then return end 
     if not text then return end 
-    
-    self:CheckPrevLine(i)
 
     self.defaultLines[i] = text 
     self.context[i] = self:ConstructContextLine(i)
 
-    self:GetGlobalFoldingAvailability()
+    self:FixIndeces()
+
+    self:FixFolding(i)
 end
 
-function DataContext:ParseDifferences()
-    for k, v in pairs(self.defaultLines) do 
-        local match = self.context[k]
+function DataContext:EntryForReal(line)
+    local function recursiveSearch(collection)
+        for k, v in pairs(collection) do 
+            if k == line then return v end 
+            if not v.folding then continue end
+    
+            local possibleResult = recursiveSearch(v.folding.folds)
+            if possibleResult then return possibleResult end 
+        end
+    end 
 
-        if not match or match.text ~= v then 
-            self.context[k] = self:ConstructContextLine(k)
-        end 
+    return recursiveSearch(self.context)
+end
+
+function DataContext:ParseArea(s, e)
+    local last = self.context[s - 1] or {}
+    local index = s 
+
+    local function recursiveParse(collection, start, ending)
+        for i = start, ending, 1 do 
+            local entry = collection[i]
+
+            if not entry then break end 
+        
+            collection[i].tokens = self:ParseRow(index, last, collection[i].text or "")
+            
+            index = index + 1
+
+            last = collection[i].tokens 
+
+            if collection.folding and #collection.folding.folds > 0 then
+                recursiveParse(collection.folding.folds, 1, #collection.folding.folds)
+            end
+        end
     end
 
-    self:GetGlobalFoldingAvailability()
+    recursiveParse(self.context, s, e)
+
+    return last 
 end
 
 local prof = {}
@@ -930,23 +1136,6 @@ do
                 ["#ifdef"] = false, 
                 ["#else"] = false,    
                 ["#endif"] = false 
-            }
-        },
-        folding = 
-        {
-            open =
-            {
-                "(",
-                "{",
-                "[",
-                "#ifdef"
-            },
-            close = 
-            {
-                ")",
-                "}",
-                "]",
-                "#endif"
             }
         },
         autoPairing =
@@ -1352,6 +1541,8 @@ local textoffset = 3
 local function mSub(x, strength) return x - (math.floor(x) % strength) end
 
 function self:Init()
+    local super = self 
+
     self.colors = {}
     self.colors.background = dark(45)
     self.colors.lineNumbersBackground = dark(55)
@@ -1361,11 +1552,12 @@ function self:Init()
     self.colors.caret = Color(25,175,25)
     self.colors.endOfText = dark(150,5)
     self.colors.tabIndicators = Color(175,175,175,35)
+    self.colors.caretAreaTabIndicator = Color(175,175,175,125)
     self.colors.currentLine = dark(200,10)
     self.colors.foldingIndicator = dark(175,35)
     self.colors.foldingAreaIndicator = Color(100,150,180, 25)
 
-    self.tabSize = 5
+    self.tabSize = 4
 
     self.caret = {
         x = 0,
@@ -1374,6 +1566,8 @@ function self:Init()
         line = 1,
         actualLine = 1
     }
+
+    self.caretRegion = {-1,-1,-1}
 
     self.selection = {
         start = {
@@ -1387,7 +1581,7 @@ function self:Init()
     }
 
     self.textPos = {
-        char = 1,
+        char = 0,
         line = 1
     } 
     self.lastTextPos = {char=1,line=1}
@@ -1400,8 +1594,8 @@ function self:Init()
         an = ""
     }
 
-    self.foldIcon   = Material("icon16/connect.png")
-    self.unfoldIcon = Material("icon16/disconnect.png")
+    self.refresh = 0
+
     self.foldButtons = {}
 
     self.highlights = {}
@@ -1415,54 +1609,73 @@ function self:Init()
 
     self.data = table.Copy(DataContext)
 
-    self.data.FoldingAvailbilityCheckStarted = function() 
-        for k, v in pairs(self.foldButtons) do
-            if IsValid(v) == false then continue end
-            v:Remove()
-        end
+    self.data.LineFolded = function(_, line, len)
+        self:GetTabLevels()
 
-        self.foldButtons = {}
+        if self.caret.actualLine <= line + len then return end
+        self.caret.actualLine = self.caret.actualLine - len 
+    end
+
+    self.data.LineUnfolded = function(_, line, len)
+        self:GetTabLevels()
+
+        if self.caret.actualLine <= line then return end 
+        self.caret.actualLine = self.caret.actualLine + len 
+    end
+
+    self.data.FoldingAvailbilityCheckStarted = function() 
+        self:HideButtons()
     end
     self.data.FoldingAvailbilityFound = function(_, i, len, t)
         local b = self:MakeFoldButton()
-        b:SetVisible(false)
         b.super = self.data.context[i]
+        b.isHovered = false 
+        b.Think = function(self)
+            if ( self:GetAutoStretchVertical() ) then
+                self:SizeToContentsY()
+            end
+
+            if self:IsHovered() == true and self.isHovered == false then 
+                super.data:RefreshFoldingForLine(i, false)
+                self.isHovered = true
+            elseif self:IsHovered() == false then self.isHovered = false end  
+        end
         b.DoClick = function(_)
             local super = b.super 
 
             if not super then 
-                self:CollectBadButtons()
+                self:HideButtons()
                 return 
             end
         
-            local line 
-
-            for k, v in pairs(self.data.context) do 
-                if v.index == super.index then
-                    line = k 
-                    break 
-                end 
-            end
+            local line = self:KeyForIndex(super.index)
 
             if not line then return end 
 
             if #super.folding.folds == 0 then  
-                _:SetIcon("icon16/connect.png")
-                
-                local limit = line + self.data.context[line].folding.available
+                b:SetFolded(true)
+
+                local l = self.data.context[line]
+
+                if not l or not l.folding then
+                    self:HideButtons()
+                    return 
+                end 
+
+                local limit = l.index + l.folding.available
 
                 self.data:FoldLine(line)
 
-                if self.caret.line > line and self.caret.line <= limit then 
+                if self.caret.line > l.index and self.caret.line <= limit then 
                     self:SetCaret(self.caret.char, limit + 1) -- if the caret is inside an area that is being folded, push it the fuck out of there xoxoxo
                 end
             else 
-                _:SetIcon("icon16/disconnect.png")
                 self.data:UnfoldLine(line)
+                self:HideButtons()
+                b:SetFolded(false)
             end
-
-            self:CollectBadButtons()
         end
+
         self.data.context[i].button = b
 
         table.insert(self.foldButtons, b)
@@ -1501,11 +1714,30 @@ function self:Init()
     self:SetCursor("beam")
 end
 
+function self:GetTab()
+    return string.rep(" ", self.tabSize)
+end
+
+function self:HandleBadButton(v)
+    if IsValid(v) == false then 
+        if v.super then v.super.button = nil end 
+        return 
+    elseif IsValid(v) == true and not v.super then 
+        v:Remove()
+    end 
+
+    v:SetVisible(false) 
+end
+
+-- Bad Function, scrap and replace with hidebuttons
 function self:CollectBadButtons()
     for k, v in pairs(self.foldButtons) do 
         if IsValid(v) == false then 
             if v.super then 
                 v.super.button = nil 
+                if v.super.folding and #v.super.folding.folds > 0 then 
+                    self.data:UnfoldLine(self:KeyForIndex(v.super.index))
+                end
             end
 
             self.foldButtons[k] = nil 
@@ -1517,8 +1749,26 @@ function self:CollectBadButtons()
             self.foldButtons[k] = nil 
 
             continue 
+        end 
+
+        if v.folding and #v.folding.folds > 0 then 
+            v:SetFolded(true) 
+        else 
+            v:SetFolded(false)
         end
+
         v:SetVisible(false) 
+    end
+end
+
+function self:HideButtons()
+    for k, v in pairs(self.foldButtons) do 
+        if IsValid(v) == false then 
+            self:HandleBadButton(v)
+            self.foldButtons[k] = nil 
+            continue 
+        end
+        v:SetVisible(false)
     end
 end
 
@@ -1531,20 +1781,54 @@ function self:GetLine(i)
     return nil 
 end
 
-function self:TextChanged() end 
+local function insertChar(text, char, index)
+    if not text or not char then return end 
+    index = index or #text 
+    return string.sub(text, 1, index) .. char .. string.sub(text, index + 1, #text) 
+end
+
+local function removeChar(text, index)
+    if not text then return end 
+    index = index or #text 
+    return string.sub(text, 1, index - 1)  .. string.sub(text, index + 1, #text)
+end
+
+local function getLR(text, index)
+    if not text or not index then return end 
+    return string.sub(text, 1, index), string.sub(text, index + 1, #text) 
+end
+
+function self:TextChanged() 
+    self:ParseVisibleLines()
+    self:GetTabLevels()
+    self:HideButtons()
+end 
 function self:_TextChanged() 
     local new = self.entry:GetText()
 
+    self.data:UnfoldLine(self.caret.actualLine)
+    self.caret.actualLine = self.caret.actualLine + self.data:UnfoldLine(self.caret.actualLine - 1)
+
     local function foo()
-        local line = self:GetLine(self.caret.line)
+        if new == "\n" then return end 
+
+        local line = self.data.context[self.caret.actualLine]
+        
         if not line then return end  
 
-        line = line.text 
-        
+        if #new == 1 then 
+            self.data:OverrideLine(self.caret.actualLine, insertChar(line.text, new, self.caret.char))
+            self:SetCaret(self.caret.char + 1, self.caret.line)
+        else 
 
+        end
     end
 
     foo()
+
+    self:GetTabLevels()
+
+    self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
 
     self.entry:SetText("")
 
@@ -1558,20 +1842,78 @@ end
 function self:_KeyCodePressed(code)
     self.lastCode = code 
 
+    local line = self.data.context[self.caret.actualLine]
+
+    if not line then return end 
+
+    local left, right = getLR(line.text, self.caret.char) 
+
     if code == KEY_DOWN then
-        self:SetCaret(self.caret.char, self.caret.line + 1)
+        self:SetCaret(self.caret.char, self.caret.line + 1, true)
     elseif code == KEY_UP then
-        self:SetCaret(self.caret.char, self.caret.line - 1)
+        self:SetCaret(self.caret.char, self.caret.line - 1, true)
     elseif code == KEY_RIGHT then 
-        self:SetCaret(self.caret.char + 1, self.caret.line)
+        self:SetCaret(self.caret.char + 1, self.caret.line, true)
     elseif code == KEY_LEFT then 
-        self:SetCaret(self.caret.char - 1, self.caret.line)
+        self:SetCaret(self.caret.char - 1, self.caret.line, true)
+    elseif code == KEY_ENTER then 
+        if self.data:UnfoldLine(self.caret.actualLine) > 0 then self.data:ValidateFoldingAvailability(self.caret.actualLine) end 
+        if self.data:UnfoldLine(self.caret.actualLine - 1) > 0 then self.data:ValidateFoldingAvailability(self.caret.actualLine - 1) end 
+
+        self.data:OverrideLine(self.caret.actualLine, left)
+        self.data:InsertLine(self.caret.actualLine + 1, right)
+
+        self:SetCaret(0, self.caret.line + 1)
+
+        self:TextChanged()
+    elseif line then 
+        if code == KEY_BACKSPACE then 
+            if self.caret.char - 1 < 0 then -- Remove line 
+                self.data:UnfoldLine(self.caret.actualLine)
+                self.data:UnfoldLine(self.caret.actualLine - 1)
+
+                local newLine = self.data.context[self.caret.actualLine - 1]
+
+                if not newLine then return end 
+
+                self.data:OverrideLine(self.caret.actualLine - 1, newLine.text .. right)
+
+                self:SetCaret(#newLine.text, self.caret.line - 1)
+
+                self.data:RemoveLine(self.caret.actualLine + 1)
+
+                self.data:ValidateFoldingAvailability(self.caret.actualLine)
+            else -- Normal character remove
+                self.data:UnfoldLine(self.caret.actualLine)
+                self.data:UnfoldLine(self.caret.actualLine - 1)
+
+                self.data:OverrideLine(self.caret.actualLine, removeChar(line.text, self.caret.char))
+                self:SetCaret(self.caret.char - 1, self.caret.line, true)
+            
+                self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
+            end 
+
+            self:TextChanged()
+     elseif code == KEY_TAB then 
+            self.data:UnfoldLine(self.caret.actualLine)
+            self.data:UnfoldLine(self.caret.actualLine - 1)
+                
+            self.data:OverrideLine(self.caret.actualLine, insertChar(line.text, self:GetTab(), self.caret.char))
+            self:SetCaret(self.caret.char + self.tabSize, self.caret.line)
+            self.tabbed = true
+
+            self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
+            self.data:ValidateFoldingAvailability(self.caret.actualLine)
+
+            self:TextChanged()
+        end
     end
 end
 
 function self:_FocusLost()
-    if self:HasFocus() == true then 
+    if self:HasFocus() == true or self.tabbed then 
         self.entry:RequestFocus()
+        self.tabbed = nil 
     end
 end
 
@@ -1582,9 +1924,9 @@ end
 
 function self:ProfileSet() end 
 function self:SetProfile(profile)
+    self:TimeRefresh(10)
     self.data:SetRulesProfile(profile)
     self:ProfileSet(self.data.profile)
-    self:UpdateTabIndicators()
 end
 
 function self:ProfileReset() end 
@@ -1595,9 +1937,10 @@ end
 
 function self:SetText(text)
     if not text then return end
+    self:TimeRefresh(10)
     self.data:SetContext(text)
     self:TextChanged()
-    self:UpdateTabIndicators()
+    self:GetTabLevels()
 end
 
 function self:FontChanged(newFont, oldFont) end 
@@ -1605,7 +1948,7 @@ function self:SetFont(name, size)
     if not name then return end 
 
     size = size or 16 
-    size = math.Clamp(size, 8, 48)
+    size = math.Clamp(size, 14, 48)
 
     local newFont = "SSLEF" .. name  .. size
 
@@ -1614,7 +1957,7 @@ function self:SetFont(name, size)
         {
             font      = name,
             size      = size,
-            weight    = 500 
+            weight    = 520 
         }
 
         surface.CreateFont(newFont, data)
@@ -1628,7 +1971,8 @@ function self:SetFont(name, size)
 
     local oldFont = table.Copy(self.font)
 
-    self.font = {
+    self.font = 
+    {
         w = w,
         h = h,
         n = newFont,
@@ -1664,35 +2008,135 @@ function self:pit(...) -- short for pos in text. Converts local x, y coordinates
     return x, y
 end
 
-function self:UpdateTabIndicators()
-    self.allTabs = {}
-    
-    if not self.data.context then return end
+local function isWhitespace(str)
+    return string.gsub(str, "%s", "") == "" 
+end
 
-    local function saveTab(cc, tab) self.allTabs[cc] = tab end
-    local lastTabs = ""
-    local visualTabs = {}
-    local m = (self.textPos.line - 1) ~= 0 and -1 or 0
-    local c = m
-    for i = self.textPos.line + m, self.textPos.line + math.ceil(self:GetTall() / self.font.h) + 1, 1 do 
-        local line = self.data.context[i]
-        if not line then break end 
-        line = line.text 
-        if string.gsub(line, "%s", "") == "" then  
-            table.insert(visualTabs, c)
-        else 
-            local _, _, left = string.find(line, "^(%s*)")
-            if #left < #lastTabs then 
-                for _, vt in pairs(visualTabs) do saveTab(vt, left .. " ") end
-            else 
-                for _, vt in pairs(visualTabs) do saveTab(vt, lastTabs .. " ") end            
-            end
-            visualTabs = {}   
-            saveTab(c, left)
-            lastTabs = left
+function self:GetTabLevelsB(s, e)
+    s = s or self.textPos.line 
+    e = e or self.textPos.line + self:VisibleLines()
+
+    self.allTabs = {}
+
+    print("---")
+
+    local function lookAheadUntilLeftSmallerThan(i, len)
+        if not self.data.context[i] then return 0 end
+        local c = i + 1
+        local nonWhitespaceFound = false 
+        while isWhitespace(self.data.context[c].text) == true or getLeftLen(self.data.context[c].text) >= len do  
+            if isWhitespace(self.data.context[c].text) == false and c ~= i then nonWhitespaceFound = true end 
+            c = c + 1
+            if not self.data.context[c] then return i end 
         end
-        c=c+1
+        return nonWhitespaceFound == true and c or i 
     end
+
+    local lastLen = -1
+
+    for i = s, e, 1 do 
+        local item = self.data.context[i] 
+
+        if not item then break end 
+
+        local len = string.gsub(item.text, "%s", "") == "" and lastLen or getLeftLen(item.text)
+
+        if len == lastLen then continue end 
+
+        local lookAhead = math.max(lookAheadUntilLeftSmallerThan(i, len) - 1, 0)
+
+        if lookAhead <= i then continue end 
+
+        self.allTabs[i] = lookAhead
+
+        lastLen = len 
+    end
+
+    PrintTable(self.allTabs)
+end
+
+function self:GetCaretTabRegion() 
+    self.caretRegion = {-1,-1,-1}
+
+    local history = {}
+    local lastTabs = 0
+
+    for line, tabs in pairs(self.allTabs) do
+
+        if tabs == lastTabs then continue end 
+
+        if tabs > lastTabs then 
+            table.insert(history, line)
+        elseif tabs < lastTabs then 
+            local startLine = history[#history] - 1
+
+            if startLine <= self.caret.actualLine and line >= self.caret.actualLine then 
+                self.caretRegion = {startLine, line, #history - 1}
+                break 
+            end 
+
+            table.remove(history)
+        end
+
+        lastTabs = tabs 
+    end
+end
+
+function self:GetTabLevels()
+    local s = self.textPos.line 
+    local e = self.textPos.line + self:VisibleLines()
+
+    self.allTabs = {}
+
+    local lastLevel = self.allTabs[s - 1] or 0
+
+    local temp = {}
+
+    for i = s, e, 1 do 
+        local item = self.data.context[i] 
+
+        if not item then break end 
+
+        if string.gsub(item.text, "%s", "") == "" then 
+            table.insert(temp, item.index)
+        else 
+            local len = getLeftLen(item.text) 
+
+            if len < lastLevel then 
+                for _, t in ipairs(temp) do self.allTabs[t] = math.ceil(len / self.tabSize) + 1 end
+            else     
+                for _, t in ipairs(temp) do self.allTabs[t] = math.ceil(lastLevel / self.tabSize) + 1 end
+            end
+
+            temp = {}
+
+            self.allTabs[item.index] = math.ceil(len / self.tabSize)
+
+            lastLevel = len 
+        end
+    end
+
+    self:GetCaretTabRegion()
+end
+
+function self:TimeRefresh(len)
+    self.refresh = RealTime() + (len or 1) 
+end
+
+function self:RefreshData() -- As insurance we refresh some of the "bugheavy" stuff sometimes 
+    self:GetTabLevels()
+    self.data:FixIndeces()
+    self:HideButtons()
+    self.data:GetGlobalFoldingAvailability()
+end
+
+function self:TokenizeArea(start, ending)
+    self.data:ParseArea(start, ending)
+end
+
+function self:ParseVisibleLines()
+    if self:IsVisible() == false then return end  
+    self.data:ParseArea(self.textPos.line , (self.textPos.line + self:VisibleLines()))
 end
 
 function self:PosOnPanel(...) return self:pop(...) end 
@@ -1720,9 +2164,9 @@ function self:IndexForKey(key)
     return self.data.context[key].index 
 end
 
-function self:CaretSet(char, line) end 
+function self:CaretSet(char, line, actualLine) end 
 function self:SetCaret(...)
-    if #{...} < 3 then return end 
+    if #{...} < 2 then return end 
 
     local char, line, swapOnReach = select(1, ...), select(2, ...), select(3, ...)
 
@@ -1733,9 +2177,9 @@ function self:SetCaret(...)
     if not actualLine then 
         local last = self.caret.actualLine
         
-        if self.lastCode == KEY_UP or self.lastCode == KEY_RIGHT then 
+        if self.lastCode == KEY_UP or self.lastCode == KEY_LEFT then 
             actualLine = last - 1
-        elseif self.lastCode == KEY_DOWN or self.lastCode == KEY_LEFT then   
+        elseif self.lastCode == KEY_DOWN or self.lastCode == KEY_RIGHT then   
             actualLine = last + 1
         else return end  
 
@@ -1750,16 +2194,19 @@ function self:SetCaret(...)
     if swapOnReach == false then 
         self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
     else
-        if char > #self.data.context[actualLine].text then 
-            
-        elseif char < 0 then 
-
+        if char > #self.data.context[actualLine].text and self.lastCode == KEY_RIGHT then 
+            if not self.data.context[actualLine + 1] then return end  
+            self:SetCaret(0, self.caret.line + 1)
+        elseif char < 0 and (self.lastCode == KEY_LEFT or self.lastCode == KEY_BACKSPACE) then 
+            self:SetCaret(#((self.data.context[actualLine - 1] or {}).text or ""), self.caret.line - 1)
         else
-
+            self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
         end
     end
 
-    self:CaretSet(char, line)
+    self:GetCaretTabRegion()
+
+    self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
 
     return self.caret.line, self.caret.char 
 end
@@ -1778,7 +2225,9 @@ function self:OnMousePressed(code)
 end
 
 function self:GetLineNumberCharCount()
-    return #tostring(self.textPos.line + self:VisibleLines() - 1)
+    local n     = self.textPos.line + self:VisibleLines() - 1
+    local entry = self.data.context[n]
+    return #tostring(entry and entry.index or n)
 end
 
 function self:GetLineNumberWidth()
@@ -1796,10 +2245,15 @@ end
 function self:PaintBefore(w, h) end 
 function self:PaintAfter(w, h) end 
 
+local function drawLine(startX, startY, endX, endY, color)
+    surface.SetDrawColor(color)
+    surface.DrawLine(startX, startY, endX, endY)
+end
+
 function self:Paint(w, h)
     self:PaintBefore(w, h)
 
-    local i = self. textPos.line 
+    local i = self.textPos.line 
 
     local mx, my = self:LocalCursorPos()
 
@@ -1828,30 +2282,16 @@ function self:Paint(w, h)
         local cLine = self.data.context[i]
         if not cLine then break end 
 
-        if cLine.button then 
+        if IsValid(cLine.button) and cLine.folding and cLine.folding.folds then 
             cLine.button:SetSize(offset * 0.75, cLine.button:GetWide())
-            cLine.button:SetVisible((mx > 0 and mx <= textoffset + x) or #cLine.folding.folds > 0)
-            cLine.button:SetPos(x - offset + offset * 0.15, c * self.font.h + (self.font.h / 2 - cLine.button:GetTall() / 2))
+            cLine.button:SetVisible((mx > 0 and mx <= textoffset + x) or (#cLine.folding.folds > 0))
+            cLine.button:SetPos(x - offset + offset * 0.15, c * self.font.h + (self.font.h / 2 - cLine.button:GetTall() / 2) - 4)
 
             if cLine.button:IsHovered() == true and #cLine.folding.folds == 0 then -- Folding Area Indicator
-
-                local counter = i 
-                local n = c
-
-                while counter < i + cLine.folding.available do 
-
-                    if isFolding(self.data.context[counter]) == true then 
-                        counter = counter + self.data.context[counter].folding.available 
-                        continue 
-                    end  
-
-                    draw.RoundedBox(0,x, (n + 1) * self.font.h, w, self.font.h, self.colors.foldingAreaIndicator)
- 
-                    counter = counter + 1
-                    n = n + 1
-                end
+                draw.RoundedBox(0, x, (c + 1) * self.font.h, w, self.font.h * cLine.folding.available, self.colors.foldingAreaIndicator)
             end
-        end 
+        elseif cLine.button ~= nil then self.data.context[i].button = nil
+        elseif IsValid(cLine.button) and cLine.folding and cLine.folding.folds then self:HandleBadButton(cLine.button) end 
 
         -- Line Numbers 
         draw.SimpleText(cLine.index, self.font.n, offset + lineNumWidth * ((lineNumCharCount - #tostring(cLine.index)) / lineNumCharCount), c * self.font.h, self.colors.lineNumbers)
@@ -1867,7 +2307,7 @@ function self:Paint(w, h)
         do 
             local lastY = 0
 
-            for tokenIndex, token in pairs(cLine.tokens or {}) do 
+            for tokenIndex, token in ipairs(cLine.tokens or {}) do 
                 local txt = token.text
 
                 if token.type == "endofline" then
@@ -1896,11 +2336,32 @@ function self:Paint(w, h)
             if self.caret.char + self.textPos.char >= self.textPos.char then 
                 draw.RoundedBox(0, textoffset + x + self.font.w * self.caret.char,c * self.font.h, 2, self.font.h, self.colors.caret)
             end 
-        end 
+        else 
+            self.data:TrimRight(i)
+        end
 
         if isFolding(cLine) == true then 
+            draw.RoundedBox(0, x, c * self.font.h, w, self.font.h, self.colors.foldingAreaIndicator)
             draw.RoundedBox(0, 0, (c + 1) * self.font.h, self:GetWide(), 1, self.colors.foldingIndicator)
-        end
+        end 
+        
+        do -- Tab Indicators 
+            local tab = self.allTabs[cLine.index]
+
+            if tab then 
+                for n = 2, tab, 1 do 
+                    local tabLen = (n - 1) * self.tabSize
+
+                    if tabLen < 0 or (tabLen >= getLeftLen(cLine.text) and cLine.text ~= "") then break end 
+
+                    local posX = (tabLen - math.max(self.textPos.char - 1, 0)) * self.font.w
+
+                    if posX < 0 then continue end 
+
+                    draw.RoundedBox(0, x + posX, c * self.font.h, 1, self.font.h, (cLine.index >= self.caretRegion[1] and cLine.index <= self.caretRegion[2] and n - 1 == self.caretRegion[3]) and self.colors.caretAreaTabIndicator or self.colors.tabIndicators)
+                end
+            end
+        end 
 
         i = i + 1
         c = c + 1
@@ -1933,13 +2394,15 @@ end
 
 function self:OnScrolled() end 
 function self:_OnScrolled(diff)
-    self:CollectBadButtons()
+    self:ParseVisibleLines()
+    self:GetTabLevels()
+    self:HideButtons()
     self:OnScrolled(diff)
 end
 
 function self:OnMouseWheeled(delta)
     if self:IsCtrl() == false then 
-        self.scroller:SetScroll(self.scroller:GetScroll() - delta * 2)
+        self.scroller:SetScroll(self.scroller:GetScroll() - delta * 4)
     else 
         self:SetFont(self.font.an, self.font.s - delta * 2)
     end
@@ -1954,16 +2417,50 @@ function self:Think()
         self:_OnScrolled(self.textPos.line - self.lastTextPos.line)
     end
 
-    self.lastTextPos = self.textPos
+    if RealTime() > self.refresh then 
+        self:RefreshData()
+        self:TimeRefresh(10)
+    end
+
+    self.lastTextPos = table.Copy(self.textPos)
 end
 
+local bFont 
 function self:MakeFoldButton()
     local button = vgui.Create("DButton", self)
-    button:SetIcon("icon16/disconnect.png")
-    button.m_Image:Dock(FILL)
-    button:SetText("")
+
+    if not bFont then 
+        bFont = {
+            font      = "Consolas",
+            size      = 35,
+            weight    = 500 
+        }
+        surface.CreateFont("SSLEFoldButtonFont", bFont)
+    end
+
+    button:SetFont("SSLEFoldButtonFont")
+
     button:SetVisible(false)
-    button.Paint = function() end
+    button.Paint = function()
+        button:SetTextColor((button:IsHovered() or button.foldStatus == true) and dark(160) or dark(110))
+    end
+    button.foldStatus = false 
+    button.SetFolded = function(self, status)
+        if status == true then 
+            button:SetText("⯈")
+        else
+            button:SetText("⯆")
+        end
+        self.foldStatus = status 
+    end
+
+    button:SetTextColor(dark(110))
+
+    button:SetAutoStretchVertical(true)
+    button:SizeToContentsY()
+
+    button:SetFolded(false)
+
     return button 
 end
 
@@ -1982,48 +2479,28 @@ local function open()
     local sb = vgui.Create("DSyntaxBox", window)
     sb:SetProfile(prof)
 	sb:Dock(FILL)
-    sb:SetFont("Consolas", 26)
-sb:SetText([[@name Dont look at me 
-@persist Viewers:table 
+    sb:SetFont("Consolas", 16)
 
-if( first() )
+    sb:SetText([[
+while(1)
 {
-    runOnTick(1)    
-}
 
-foreach(I, Ply:entity = players())
-{
-    local Name = Ply:name()
-    
-    # Remove Players that have left the server 
-    if(!Ply:isValid() & Viewers[Name, number])
+
+    if(1)
     {
-        holoDelete(Viewers[Name, number])
-        Viewers:removeNumber(Name)   
-        continue 
+        if(2)
+        {
+            allTabs
+
+            a
+        }
     }
-    
-    if(Ply:aimEntity() != owner())
-    { 
-        if(Viewers[Name, number]) # If he was looking at you, remove the holo 
-  aa      {aa
-            holoDelete(Viewers[Name, number])
-            Viewers:removeNumber(Name)           
-   aa     }aa
-        continue 
-    } # If hes not looking at you, go next 
-    
-    if(Viewers[Name, number]){ continue } # If hes already blinded, go next 
-    
-    holoCreate(I, Ply:shootPos(), vec(-5), ang(), vec(255,0,0))
-    holoParentAttachment(I, Ply, "eyes")
-    
-    Viewers[Name, number] = I # Save the holo id so it can later be removed 
 }
 
-
-aaaaaaaaa
-aaaaaaaaaaaaaaaadddddddddddddds]])
+        
+        
+        ]])
+ --   sb:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
 end
 
 concommand.Add("sopen", function( ply, cmd, args )
