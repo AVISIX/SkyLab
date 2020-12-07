@@ -1554,12 +1554,15 @@ function self:Init()
     self.colors.tabIndicators = Color(175,175,175,35)
     self.colors.caretAreaTabIndicator = Color(175,175,175,125)
     self.colors.currentLine = dark(200,10)
+
     self.colors.foldingIndicator = dark(175,35)
-    self.colors.foldingAreaIndicator = Color(100,150,180, 25)
+    self.colors.foldingAreaIndicator = Color(100,150,180, 15)
+    self.colors.foldsPreviewBackground = dark(35)
+    self.colors.amountOfFoldedLines = Color(10,255,10,75)
 
     self.tabSize = 4
 
-    self.caret = {
+        self.caret = {
         x = 0,
         y = 0, 
         char = 1,
@@ -1793,6 +1796,11 @@ local function removeChar(text, index)
     return string.sub(text, 1, index - 1)  .. string.sub(text, index + 1, #text)
 end
 
+local function removeArea(text, start, ending)
+    if not text or not start or not ending then return end 
+    return string.sub(text, 1, start) .. string.sub(text, ending, #text)
+end
+
 local function getLR(text, index)
     if not text or not index then return end 
     return string.sub(text, 1, index), string.sub(text, index + 1, #text) 
@@ -1878,7 +1886,7 @@ function self:_KeyCodePressed(code)
 
                 self.data:OverrideLine(self.caret.actualLine - 1, newLine.text .. right)
 
-                self:SetCaret(#newLine.text, self.caret.line - 1)
+              self:SetCaret(#newLine.text, self.caret.line - 1)
 
                 self.data:RemoveLine(self.caret.actualLine + 1)
 
@@ -1887,9 +1895,24 @@ function self:_KeyCodePressed(code)
                 self.data:UnfoldLine(self.caret.actualLine)
                 self.data:UnfoldLine(self.caret.actualLine - 1)
 
-                self.data:OverrideLine(self.caret.actualLine, removeChar(line.text, self.caret.char))
-                self:SetCaret(self.caret.char - 1, self.caret.line, true)
-            
+                local left = getLeftLen(line.text)
+
+                if self.caret.char <= left then 
+                    local save = left 
+
+                    if  left % self.tabSize ~= 0 then  
+                        left = left - left % self.tabSize
+                    else
+                        left = left - self.tabSize 
+                    end
+
+                    self.data:OverrideLine(self.caret.actualLine, string.rep(" ", left) .. string.gsub(line.text, "^(%s*)", ""))
+                    self:SetCaret(left - save % self.caret.char, self.caret.line)
+                else 
+                    self.data:OverrideLine(self.caret.actualLine, removeChar(line.text, self.caret.char))
+                    self:SetCaret(self.caret.char - 1, self.caret.line, true)
+                end
+
                 self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
             end 
 
@@ -2012,49 +2035,6 @@ local function isWhitespace(str)
     return string.gsub(str, "%s", "") == "" 
 end
 
-function self:GetTabLevelsB(s, e)
-    s = s or self.textPos.line 
-    e = e or self.textPos.line + self:VisibleLines()
-
-    self.allTabs = {}
-
-    print("---")
-
-    local function lookAheadUntilLeftSmallerThan(i, len)
-        if not self.data.context[i] then return 0 end
-        local c = i + 1
-        local nonWhitespaceFound = false 
-        while isWhitespace(self.data.context[c].text) == true or getLeftLen(self.data.context[c].text) >= len do  
-            if isWhitespace(self.data.context[c].text) == false and c ~= i then nonWhitespaceFound = true end 
-            c = c + 1
-            if not self.data.context[c] then return i end 
-        end
-        return nonWhitespaceFound == true and c or i 
-    end
-
-    local lastLen = -1
-
-    for i = s, e, 1 do 
-        local item = self.data.context[i] 
-
-        if not item then break end 
-
-        local len = string.gsub(item.text, "%s", "") == "" and lastLen or getLeftLen(item.text)
-
-        if len == lastLen then continue end 
-
-        local lookAhead = math.max(lookAheadUntilLeftSmallerThan(i, len) - 1, 0)
-
-        if lookAhead <= i then continue end 
-
-        self.allTabs[i] = lookAhead
-
-        lastLen = len 
-    end
-
-    PrintTable(self.allTabs)
-end
-
 function self:GetCaretTabRegion() 
     self.caretRegion = {-1,-1,-1}
 
@@ -2076,6 +2056,8 @@ function self:GetCaretTabRegion()
                 startLine = startLine - 1
                 if startLine <= self.caret.actualLine and line >= self.caret.actualLine then 
                     self.caretRegion = {startLine, line, #history - 1}
+                    PrintTable(self.caretRegion)
+
                     return  
                 end 
             
@@ -2092,8 +2074,6 @@ function self:GetCaretTabRegion()
     if not last then return end 
 
     self.caretRegion = {last - 1, lastLine, #history}
-
-    PrintTable(self.caretRegion)
 end
 
 function self:GetTabLevels()
@@ -2102,9 +2082,8 @@ function self:GetTabLevels()
 
     self.allTabs = {}
 
-    local lastLevel = self.allTabs[s - 1] or 0
-
     local temp = {}
+    local lastLevel = -1
 
     for i = s, e, 1 do 
         local item = self.data.context[i] 
@@ -2118,7 +2097,24 @@ function self:GetTabLevels()
 
             if len < lastLevel then 
                 for _, t in ipairs(temp) do self.allTabs[t] = math.ceil(len / self.tabSize) + 1 end
-            else     
+            elseif lastLevel == -1 then -- If all of the start was whitespaces
+                local lastValidLen = 0
+
+                for i = s, 1, -1 do 
+                    local item = self.data.context[i] 
+
+                    if not item then break end 
+
+                    if string.gsub(item.text, "%s", "") ~= "" then 
+                        lastValidLen = getLeftLen(item.text)
+                        break 
+                    end
+                end
+
+                if lastValidLen ~= 0 then
+                    for _, t in ipairs(temp) do self.allTabs[t] = math.ceil(math.min(lastValidLen, len) / self.tabSize) + 1 end
+                end 
+            else 
                 for _, t in ipairs(temp) do self.allTabs[t] = math.ceil(lastLevel / self.tabSize) + 1 end
             end
 
@@ -2130,7 +2126,9 @@ function self:GetTabLevels()
         end
     end
 
-    self:GetCaretTabRegion()
+    if #temp then -- If all at the end was whitespaces 
+        for _, t in ipairs(temp) do self.allTabs[t] = math.ceil(lastLevel / self.tabSize) + 1 end 
+    end
 end
 
 function self:TimeRefresh(len)
@@ -2218,8 +2216,6 @@ function self:SetCaret(...)
         end
     end
 
-    self:GetCaretTabRegion()
-
     self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
 
     return self.caret.line, self.caret.char 
@@ -2264,6 +2260,35 @@ local function drawLine(startX, startY, endX, endY, color)
     surface.DrawLine(startX, startY, endX, endY)
 end
 
+function self:PaintTokensAt(tokens, x, y, maxChars)
+    if not tokens then return end 
+
+    maxChars = maxChars or self:VisibleChars()
+
+    local lastY = 0
+
+    for tokenIndex, token in ipairs(tokens) do 
+        local txt = token.text
+
+        if token.type == "endofline" then
+            draw.SimpleText("⮯", self.font.n, x + lastY, y, self.colors.tabIndicators)
+            break        
+        elseif token.type == "error" then 
+            hasError = true 
+        end
+
+        if token.ending < self.textPos.char or token.start > self.textPos.char + maxChars then 
+            continue
+        elseif token.start < self.textPos.char and token.ending >= self.textPos.char then  
+            txt = string.sub(txt, self.textPos.char - token.start + 1, #txt)
+        end
+
+        local textY, _ = draw.SimpleText(txt, self.font.n, x + lastY, y, (not token.color and self.data.profile.colors[token.type] or self.data.profile.colors[token.color]) or Color(255,255,255))
+
+        lastY = lastY + textY
+    end
+end
+
 function self:Paint(w, h)
     self:PaintBefore(w, h)
 
@@ -2296,52 +2321,10 @@ function self:Paint(w, h)
         local cLine = self.data.context[i]
         if not cLine then break end 
 
-        if IsValid(cLine.button) and cLine.folding and cLine.folding.folds then 
-            cLine.button:SetSize(offset * 0.75, cLine.button:GetWide())
-            cLine.button:SetVisible((mx > 0 and mx <= textoffset + x) or (#cLine.folding.folds > 0))
-            cLine.button:SetPos(x - offset + offset * 0.15, c * self.font.h + (self.font.h / 2 - cLine.button:GetTall() / 2) - 4)
-
-            if cLine.button:IsHovered() == true and #cLine.folding.folds == 0 then -- Folding Area Indicator
-                draw.RoundedBox(0, x, (c + 1) * self.font.h, w, self.font.h * cLine.folding.available, self.colors.foldingAreaIndicator)
-            end
-        elseif cLine.button ~= nil then self.data.context[i].button = nil
-        elseif IsValid(cLine.button) and cLine.folding and cLine.folding.folds then self:HandleBadButton(cLine.button) end 
-
         -- Line Numbers 
         draw.SimpleText(cLine.index, self.font.n, offset + lineNumWidth * ((lineNumCharCount - #tostring(cLine.index)) / lineNumCharCount), c * self.font.h, self.colors.lineNumbers)
         
         local hasError = false 
-
-        -- Tab Indicators
-        if self.data.profile.language ~= "Plain" then 
-
-        end 
-
-        -- Syntax Coloring 
-        do 
-            local lastY = 0
-
-            for tokenIndex, token in ipairs(cLine.tokens or {}) do 
-                local txt = token.text
-
-                if token.type == "endofline" then
-                    draw.SimpleText("⮯", self.font.n, x + lastY, c * self.font.h, self.colors.tabIndicators)
-                    break        
-                elseif token.type == "error" then 
-                    hasError = true 
-                end
-
-                if token.ending < self.textPos.char or token.start > self.textPos.char + visChars then 
-                    continue
-                elseif token.start < self.textPos.char and token.ending >= self.textPos.char then  
-                    txt = string.sub(txt, self.textPos.char - token.start + 1, #txt)
-                end
-
-                local textY, _ = draw.SimpleText(txt, self.font.n, textoffset + x + lastY, c * self.font.h, (not token.color and self.data.profile.colors[token.type] or self.data.profile.colors[token.color]) or Color(255,255,255))
-
-                lastY = lastY + textY
-            end
-        end 
 
         -- Caret 
         if cLine.index == self.caret.line then
@@ -2354,13 +2337,58 @@ function self:Paint(w, h)
             self.data:TrimRight(i)
         end
 
-        if isFolding(cLine) == true then 
-            draw.RoundedBox(0, x, c * self.font.h, w, self.font.h, self.colors.foldingAreaIndicator)
-            draw.RoundedBox(0, 0, (c + 1) * self.font.h, self:GetWide(), 1, self.colors.foldingIndicator)
+        self:PaintTokensAt(cLine.tokens, textoffset + x, c * self.font.h, visChars)  
+
+        local skips = 0
+
+        if IsValid(cLine.button) and cLine.folding and cLine.folding.folds then 
+            cLine.button:SetSize(offset * 0.75, cLine.button:GetWide())
+            cLine.button:SetVisible((mx > 0 and mx <= textoffset + x) or (#cLine.folding.folds > 0))
+            cLine.button:SetPos(x - offset + offset * 0.15, c * self.font.h + (self.font.h / 2 - cLine.button:GetTall() / 2) - 4)
+
+            if cLine.button:IsHovered() == true then 
+                if #cLine.folding.folds == 0 then -- When unfolded, show the area that will be folded 
+                    draw.RoundedBox(0, x, (c + 1) * self.font.h, w, self.font.h * cLine.folding.available, self.colors.foldingAreaIndicator)
+                else -- If its folded and button is hovered, show the text that could get unfolded 
+                    local len = math.min(#cLine.folding.folds, visLines - c - 1)
+
+                    draw.RoundedBox(0, x, (c + 1) * self.font.h, w, len * self.font.h, self.colors.foldsPreviewBackground)
+
+                    for i = 1, len, 1 do 
+                        local l = cLine.folding.folds[i]
+                        local lf = l.folding
+
+                        if lf and #lf.folds > 0 then 
+                            draw.SimpleText(" < " .. #lf.folds .. " Line" .. (#lf.folds > 1 and "s" or "") .. " folded >", self.font.n, x + (l.tokens[#l.tokens].ending + 1) * self.font.w, (c + i) * self.font.h, self.colors.amountOfFoldedLines)
+                            draw.RoundedBox(0, x, (c + i + 1) * self.font.h, self:GetWide() - x, 1, self.colors.foldingIndicator) 
+                        end
+
+                        self:PaintTokensAt(cLine.folding.folds[i].tokens, textoffset + x, (c + i) * self.font.h, visChars)  
+                    end
+
+                    draw.RoundedBox(0, 0, (c + 1) * self.font.h, self:GetWide(), 1, self.colors.foldingIndicator)
+                    draw.RoundedBox(0, 0, (c + len + 1) * self.font.h, self:GetWide(), 1, self.colors.foldingIndicator)
+
+                    c = c + len 
+
+                    skips = len 
+                end
+            elseif isFolding(cLine) == true then -- WHen folded but not hovered, show where the fold is 
+                draw.SimpleText(" < " .. #cLine.folding.folds .. " Line" .. (#cLine.folding.folds > 1 and "s" or "") .. " folded >", self.font.n, x + (cLine.tokens[#cLine.tokens].ending + 1) * self.font.w, c * self.font.h, self.colors.amountOfFoldedLines)
+
+                draw.RoundedBox(0, x, c * self.font.h, w, self.font.h, self.colors.foldingAreaIndicator)
+                draw.RoundedBox(0, 0, (c + 1) * self.font.h, self:GetWide(), 1, self.colors.foldingIndicator)
+            end
+        elseif cLine.button ~= nil then self.data.context[i].button = nil
+        elseif IsValid(cLine.button) and cLine.folding and cLine.folding.folds then self:HandleBadButton(cLine.button) end 
+
+        -- Tab Indicators
+        if self.data.profile.language ~= "Plain" then 
+
         end 
-        
+
         do -- Tab Indicators 
-            local tab = self.allTabs[cLine.index]
+            local tab = self.allTabs[cLine.index + skips]
 
             if tab then 
                 for n = 2, tab, 1 do 
@@ -2372,9 +2400,7 @@ function self:Paint(w, h)
 
                     if posX < 0 then continue end 
 
-                  --  print(cLine.index .. " >=  " .. self.caretRegion[1] .. " || " .. cLine.index .. " <= " .. self.caretRegion[2])
-
-                    draw.RoundedBox(0, x + posX, c * self.font.h, 1, self.font.h, (cLine.index >= self.caretRegion[1] and cLine.index <= self.caretRegion[2] and n - 1 == self.caretRegion[3]) and self.colors.caretAreaTabIndicator or self.colors.tabIndicators)
+                    draw.RoundedBox(0, x + posX, c * self.font.h, 1, self.font.h, self.colors.tabIndicators)
                 end
             end
         end 
