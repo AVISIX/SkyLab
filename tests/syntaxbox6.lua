@@ -2496,8 +2496,7 @@ function self:Paint(w, h)
             draw.RoundedBox(0, 0, c * self.font.h, self:GetWide(), self.font.h, self.colors.currentLine)
 
             if self.caret.char + self.textPos.char >= self.textPos.char then 
-                local cx, cy = self:pop(self.caret.char, self.caret.actualLine - self.textPos.line)
-                draw.RoundedBox(0, cx,cy, 2, self.font.h, self.colors.caret)
+                draw.RoundedBox(0, textoffset + x + self.font.w * (self.caret.char - self.textPos.char + (self.textPos.char > 0 and 1 or 0)),c * self.font.h, 2, self.font.h, self.colors.caret)
             end 
         else 
             self.data:TrimRight(i)
