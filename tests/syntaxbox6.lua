@@ -1007,28 +1007,34 @@ function DataContext:EntryForReal(line)
 end
 
 function DataContext:ParseArea(s, e)
-    local last = self.context[s - 1] or {}
+    local last = (self.context[s - 1] or {}).tokens or {}
     local index = s 
 
-    local function recursiveParse(collection, start, ending)
+    local function recursiveParse(collection, start, ending, inFolds)
         for i = start, ending, 1 do 
             local entry = collection[i]
 
             if not entry then break end 
         
-            collection[i].tokens = self:ParseRow(index, last, collection[i].text or "")
+            local newTokens = self:ParseRow(index, last or {}, collection[i].text or "")
+
+            if inFolds == true and i == 1 and #newTokens == #entry.tokens then 
+                break -- We do this to determine wether a full parse is requiered, if the first folded line changes, then all the others are certainly gonna change too.
+            end
+
+            collection[i].tokens = newTokens 
             
             index = index + 1
 
             last = collection[i].tokens 
 
-            if collection.folding and #collection.folding.folds > 0 then
-                recursiveParse(collection.folding.folds, 1, #collection.folding.folds)
+            if entry.folding and #entry.folding.folds > 0 then
+                recursiveParse(entry.folding.folds, 1, #entry.folding.folds, true)
             end
         end
     end
 
-    recursiveParse(self.context, s, e)
+    recursiveParse(self.context, s, e, false)
 
     return last 
 end
@@ -1470,58 +1476,6 @@ do
         DataContext:SetRulesProfile(prof)
 end 
 
---[[
-    local r = DataContext:SetContext([[@name Codeviewer - V2
-
-    # [ --- Config --- ] #
-    @persist CVConfig:table Name:string
-
-    # [ --- Globals --- ] #
-    @persist PrevLine PrevX LastLineNumbersWidth LastLineIndex LastToggle
-    @persist [Mode PrevMode CurrentFile FileContents]:string
-    @persist EGP:wirelink
-    @persist [E User]:entity
-    @persist [E2Events E2Data]:table
-    @persist [Cursor PrevTextPos]:vector2
-
-    # [ --- File Loader --- ] #
-    @persist FileLoading 
-
-    # [ --- Parser & Combiner --- ] #
-    @persist E2Parsed E2Combined 
-
-    # [ --- Visualizer --- ] #
-    @persist VLoading VLineCounter VDone TextStartingIndex
-    @persist [PreprocText CommentsText StringsText KeywordsText VariablesText TypesText NumbersText UserFunctionsText FunctionsText EnumsText PPCommandsText DefaultText TabSpaceText ErrorText]:string
-
-    # [ --- File Browser --- ] #
-    @persist FileListing Files:array BrowserActive SavedCursor:vector2 Page Up2Date BrowserItemsStartIndex FilePath:string
-
-    #@model models/hunter/blocks/cube05x05x05.mdl
-
-    interval(60)
-
-    AimEnt = User:aimEntity()
-
-    if(first())
-    { 
-        Name = "Codeviewer - V2.5"
-        
-        E = entity()
-        
-        setName(Name)
-        
-        runOnChat(1)
-        runOnLast(1)
-        runOnFile(1)
-    }] ])
-
-                DataContext:FoldLine(5)
-
-        PrintTable(r)
-
-]]
-
 local fontBank = {}
 
 local function dark(n,a)
@@ -1539,6 +1493,9 @@ local offset = 25
 local textoffset = 3
 
 local function mSub(x, strength) return x - (math.floor(x) % strength) end
+
+AccessorFunc(self, "tabSize", "TabSize", FORCE_NUMBER)
+AccessorFunc(self, "colors", "Colors")
 
 function self:Init()
     local super = self 
@@ -1562,7 +1519,7 @@ function self:Init()
 
     self.tabSize = 4
 
-        self.caret = {
+    self.caret = {
         x = 0,
         y = 0, 
         char = 1,
@@ -1572,6 +1529,7 @@ function self:Init()
 
     self.caretRegion = {-1,-1,-1}
 
+    self.highlights = {}
     self.selection = {
         start = {
             char = 0,
@@ -1587,7 +1545,15 @@ function self:Init()
         char = 0,
         line = 1
     } 
-    self.lastTextPos = {char=1,line=1}
+    
+    function self.textPos:Set(add)
+        add = add or 0 
+        local scroll = super.scroller:GetScroll() + add  
+        self.line = math.ceil(scroll + 1)
+        super.scroller:SetScroll(scroll)
+    end
+
+    self.lastTextPos = {char=-1,line=-1}
 
     self.font = {
         w = 0,
@@ -1645,6 +1611,8 @@ function self:Init()
         end
         b.DoClick = function(_)
             local super = b.super 
+
+            self:ResetSelection()
 
             if not super then 
                 self:HideButtons()
@@ -1764,6 +1732,49 @@ function self:CollectBadButtons()
     end
 end
 
+function self:SetSelection(...)
+    local startChar, startLine, endingChar, endingLine = select(1, ...), select(2, ...), select(3, ...), select(4, ...)
+
+    if not startChar then return end 
+
+    if type(startChar) == "table" and not startLine then 
+        self.selection.start = table.Copy(startChar)
+        self.selection.ending = table.Copy(startChar)
+        return 
+    elseif type(startChar) == "table" and type(startLine) == "table" then 
+        self.selection.start = table.Copy(startChar)
+        self.selection.ending = table.Copy(startLine) 
+        return 
+    elseif type(startChar) == "number" and type(startLine) == "number" and not endingChar then 
+        endingChar = startChar 
+        endingLine = startLine  
+    end
+
+    self.selection = {
+        start = {
+            char = startChar, 
+            line = startLine
+        },
+        ending = 
+        {
+            char = endingChar,
+            line = endingLine 
+        }
+    }
+end 
+
+function self:SetSelectionEnd(t)
+    self.selection.ending = table.Copy(t) 
+end
+
+function self:IsSelecting()
+    return self.selection.start.char ~= self.selection.ending.char or self.selection.start.line ~= self.selection.ending.line 
+end
+
+function self:ResetSelection()
+    self:SetSelection(self.caret)
+end
+
 function self:HideButtons()
     for k, v in pairs(self.foldButtons) do 
         if IsValid(v) == false then 
@@ -1811,6 +1822,7 @@ function self:TextChanged()
     self:GetTabLevels()
     self:HideButtons()
 end 
+
 function self:_TextChanged() 
     local new = self.entry:GetText()
 
@@ -1856,17 +1868,39 @@ function self:_KeyCodePressed(code)
 
     local left, right = getLR(line.text, self.caret.char) 
 
+    local savedCaret = self:IsShift() == true and table.Copy(self.caret) or nil 
+    local function handleSelection()
+        if self:IsShift() == true then 
+            if self:IsSelecting() == false then 
+                self:SetSelection(savedCaret, self.caret)
+            else 
+                self:SetSelectionEnd(self.caret)
+            end
+        else 
+            self:ResetSelection()
+        end 
+    end
+
     if code == KEY_DOWN then
         self:SetCaret(self.caret.char, self.caret.line + 1, true)
+        handleSelection()
     elseif code == KEY_UP then
         self:SetCaret(self.caret.char, self.caret.line - 1, true)
+        handleSelection()
     elseif code == KEY_RIGHT then 
         self:SetCaret(self.caret.char + 1, self.caret.line, true)
+        handleSelection()
     elseif code == KEY_LEFT then 
         self:SetCaret(self.caret.char - 1, self.caret.line, true)
+        handleSelection()
     elseif code == KEY_ENTER then 
-        if self.data:UnfoldLine(self.caret.actualLine) > 0 then self.data:ValidateFoldingAvailability(self.caret.actualLine) end 
-        if self.data:UnfoldLine(self.caret.actualLine - 1) > 0 then self.data:ValidateFoldingAvailability(self.caret.actualLine - 1) end 
+        if self.data:UnfoldLine(self.caret.actualLine) > 0 then 
+            self.data:ValidateFoldingAvailability(self.caret.actualLine) 
+        end 
+
+        if self.caret.char ~= #line.text and self.data:UnfoldLine(self.caret.actualLine - 1) > 0 then 
+            self.data:ValidateFoldingAvailability(self.caret.actualLine - 1) 
+        end 
 
         self.data:OverrideLine(self.caret.actualLine, left)
         self.data:InsertLine(self.caret.actualLine + 1, right)
@@ -1886,47 +1920,78 @@ function self:_KeyCodePressed(code)
 
                 self.data:OverrideLine(self.caret.actualLine - 1, newLine.text .. right)
 
-              self:SetCaret(#newLine.text, self.caret.line - 1)
+                self:SetCaret(#newLine.text, self.caret.line - 1)
 
                 self.data:RemoveLine(self.caret.actualLine + 1)
 
                 self.data:ValidateFoldingAvailability(self.caret.actualLine)
             else -- Normal character remove
-                self.data:UnfoldLine(self.caret.actualLine)
-                self.data:UnfoldLine(self.caret.actualLine - 1)
+                local save = self.caret.actualLine
+                local unfolds = self.data:UnfoldLine(save)
 
                 local left = getLeftLen(line.text)
 
                 if self.caret.char <= left then 
-                    local save = left 
+                    local save = self.caret.char
 
-                    if  left % self.tabSize ~= 0 then  
-                        left = left - left % self.tabSize
-                    else
-                        left = left - self.tabSize 
+                    if self.caret.char % self.tabSize == 0 then 
+                        self.caret.char = self.caret.char - self.tabSize 
+                    else 
+                        self.caret.char = self.caret.char - self.caret.char  % self.tabSize 
                     end
 
-                    self.data:OverrideLine(self.caret.actualLine, string.rep(" ", left) .. string.gsub(line.text, "^(%s*)", ""))
-                    self:SetCaret(left - save % self.caret.char, self.caret.line)
+                    local diff = save - self.caret.char 
+
+                    self.data:OverrideLine(self.caret.actualLine, string.rep(" ", left - diff) .. string.gsub(line.text, "^(%s*)", "")) 
+                    self:SetCaret(self.caret.char, self.caret.line, true)
                 else 
+                    self.data:UnfoldLine(self.caret.actualLine - 1)
+
                     self.data:OverrideLine(self.caret.actualLine, removeChar(line.text, self.caret.char))
                     self:SetCaret(self.caret.char - 1, self.caret.line, true)
+
+                    self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
                 end
 
-                self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
+                if unfolds > 0 then 
+                    self.data:ValidateFoldingAvailability(save)
+                end
             end 
 
             self:TextChanged()
-     elseif code == KEY_TAB then 
-            self.data:UnfoldLine(self.caret.actualLine)
-            self.data:UnfoldLine(self.caret.actualLine - 1)
+     elseif code == KEY_TAB then
+            local save    = self.caret.actualLine 
+            local unfolds = self.data:UnfoldLine(save)
+
+            local left = getLeftLen(line.text)
+
+            if self.caret.char <= left then 
+                local save = self.caret.char
+
+                if self.caret.char % self.tabSize == 0 then 
+                    self.caret.char = self.caret.char + self.tabSize 
+                else 
+                    self.caret.char = self.caret.char - self.caret.char  % self.tabSize + self.tabSize 
+                end
+
+                local diff = self.caret.char - save        
+
+                self.data:OverrideLine(self.caret.actualLine, string.rep(" ", left + diff) .. string.gsub(line.text, "^(%s*)", ""))
+                self:SetCaret(self.caret.char, self.caret.line)
+            else
+                self.data:UnfoldLine(self.caret.actualLine - 1)
                 
-            self.data:OverrideLine(self.caret.actualLine, insertChar(line.text, self:GetTab(), self.caret.char))
-            self:SetCaret(self.caret.char + self.tabSize, self.caret.line)
+                self.data:OverrideLine(self.caret.actualLine, insertChar(line.text, self:GetTab(), self.caret.char))
+                self:SetCaret(self.caret.char + self.tabSize, self.caret.line)
+
+                self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
+            end
+
             self.tabbed = true
 
-            self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
-            self.data:ValidateFoldingAvailability(self.caret.actualLine)
+            if unfolds > 0 then 
+                self.data:ValidateFoldingAvailability(save)
+            end
 
             self:TextChanged()
         end
@@ -2005,31 +2070,6 @@ function self:SetFont(name, size)
 
     self:FontChanged(self.font, oldFont)
 end 
-
-function self:PosInText(...) return self:pit(...) end 
-function self:pit(...) -- short for pos in text. Converts local x, y coordinates to a position in the text 
-    if #{...} ~= 2 then return end 
-
-    local x, y = select(1, ...), select(2, ...)
-
-    local panelW, panelH = self:GetSize()
-
-    if x == nil then x = 1 else x = math.Clamp(x, 0, panelW) end
-    if y == nil then y = 1 else y = math.Clamp(y, 0, panelH) end 
-
-    x = x - (offset * 2 + self:GetLineNumberWidth() - textoffset)
-    x = x - self.textPos.char * self.font.w 
-
-    x = math.Round(mSub(x, self.font.w) / self.font.w + self.textPos.char)
-    y = math.Round(mSub(y, self.font.h) / self.font.h + self.textPos.line)
-
-    y = math.Clamp(y, 1, #self.data.context)
-    x = math.Clamp(x, 0, #(self.data.context[y].text or "") - self.textPos.char + 1)
-
-    y = self.data.context[y].index 
-
-    return x, y
-end
 
 local function isWhitespace(str)
     return string.gsub(str, "%s", "") == "" 
@@ -2151,13 +2191,38 @@ function self:ParseVisibleLines()
     self.data:ParseArea(self.textPos.line , (self.textPos.line + self:VisibleLines()))
 end
 
+function self:PosInText(...) return self:pit(...) end 
+function self:pit(...) -- short for pos in text. Converts local x, y coordinates to a position in the text 
+    if #{...} ~= 2 then return end 
+
+    local x, y = select(1, ...), select(2, ...)
+
+    local panelW, panelH = self:GetSize()
+
+    if x == nil then x = 1 else x = math.Clamp(x, 0, panelW) end
+    if y == nil then y = 1 else y = math.Clamp(y, 0, panelH) end 
+
+    x = x - (offset * 2 + self:GetLineNumberWidth() - textoffset)
+  --  x = x + self.textPos.char * self.font.w 
+
+    x = math.Round(mSub(x, self.font.w) / self.font.w + self.textPos.char - 1)
+    y = math.Round(mSub(y, self.font.h) / self.font.h + self.textPos.line)
+
+    y = math.Clamp(y, 1, #self.data.context)
+    x = math.Clamp(x, 0, #(self.data.context[y].text or ""))
+
+    y = self.data.context[y].index 
+
+    return x, y
+end
+
 function self:PosOnPanel(...) return self:pop(...) end 
 function self:pop(...) -- short for pos on panel. Converts a position in the text to a position on the panel
     if #{...} ~= 2 then return end 
 
     local char, line = select(1, ...), select(2, ...)
 
-    local x = char * self.font.w 
+    local x = (char - self.textPos.char + (self.textPos.char > 0 and 1 or 0)) * self.font.w 
     local y = line * self.font.h 
 
     x = x + offset * 2 + self:GetLineNumberWidth() + textoffset 
@@ -2218,6 +2283,8 @@ function self:SetCaret(...)
 
     self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
 
+    self:Goto()
+
     return self.caret.line, self.caret.char 
 end
 
@@ -2227,6 +2294,7 @@ function self:OnMousePressed(code)
 
     if code == MOUSE_LEFT then 
         self:SetCaret(self:pit(self:LocalCursorPos()))
+        self:SetSelection(self.caret.char, self.caret.actualLine)
     elseif code == MOUSE_RIGHT then 
 
     end
@@ -2234,14 +2302,15 @@ function self:OnMousePressed(code)
     if self.entry:HasFocus() == false then self.entry:RequestFocus() end 
 end
 
-function self:GetLineNumberCharCount()
-    local n     = self.textPos.line + self:VisibleLines() - 1
+function self:GetLineNumberCharCount(add)
+    add = add or 0 
+    local n     = self.textPos.line + self:VisibleLines() - 1 + add 
     local entry = self.data.context[n]
     return #tostring(entry and entry.index or n)
 end
 
-function self:GetLineNumberWidth()
-    return self:GetLineNumberCharCount() * self.font.w 
+function self:GetLineNumberWidth(add)
+    return self:GetLineNumberCharCount(add) * self.font.w 
 end
 
 function self:VisibleLines()
@@ -2249,7 +2318,7 @@ function self:VisibleLines()
 end
 
 function self:VisibleChars()
-    return math.ceil(self:GetWide() / self.font.w)
+    return math.ceil((self:GetWide() - self:GetLineNumberWidth() - offset * 2) / self.font.w) 
 end
 
 function self:PaintBefore(w, h) end 
@@ -2258,6 +2327,102 @@ function self:PaintAfter(w, h) end
 local function drawLine(startX, startY, endX, endY, color)
     surface.SetDrawColor(color)
     surface.DrawLine(startX, startY, endX, endY)
+end
+
+local function swap(a, b)
+    local save = (type(a) == "table" and table.Copy(a) or a)
+    a = b 
+    b = save
+    return a, b 
+end
+
+function self:Goto(char, line)
+    line = line or self.caret.actualLine 
+    char = char or self.caret.char 
+    
+    do 
+        local minLine = self.textPos.line  
+        local maxLine = minLine + self:VisibleLines()
+
+        local diff = 0
+
+        if line < minLine then 
+            diff = line - minLine
+        elseif line > maxLine - 1 then 
+            diff = line - (maxLine - 1)
+        end
+
+        self.textPos:Set(diff)
+    end
+
+    do 
+        local minChar = self.textPos.char - 1
+        local maxChar = minChar + self:VisibleChars() - math.ceil(self.scroller:GetWide() / self.font.w) - 1
+
+        local diff = 0 
+
+        if char < minChar then 
+            diff = char - minChar
+        elseif char > maxChar then 
+            diff = char - maxChar 
+        end
+
+        self.textPos.char = math.max(self.textPos.char + diff, 0) 
+    end
+end
+
+function self:Highlight(start, ending, i, c, col)
+    if not start or not ending or not i or not c then return end 
+
+    local line = self.data.context[i] 
+
+    if not line then return end 
+
+    line = line.text 
+
+    col = col or self.colors.highlights
+
+    surface.SetDrawColor(col)
+
+    if start.line == ending.line and i == start.line then -- If selection is in the same Line 
+        local sx,sy = self:pop(start.char, c)
+        local ex,ey = self:pop(ending.char, c)
+
+        if ending.char > start.char then 
+            surface.DrawRect(sx, sy, ex - sx, self.font.h)
+        else
+            surface.DrawRect(ex, ey, sx - ex, self.font.h)
+        end
+    elseif i == ending.line then -- if multiline, end of line selection
+        if ending.line > start.line then 
+            local ex,ey = self:pop(ending.char, c)
+            local sx,sy = self:pop(0, c)
+
+            surface.DrawRect(sx, sy, ex - sx, self.font.h)
+        else
+            local sx,sy = self:pop(ending.char, c)
+            local ex,ey = self:pop(#line, c)     
+
+            surface.DrawRect(sx, sy, ex - sx, self.font.h)               
+        end
+    elseif i == start.line then -- if multiline, start of line selection
+        if ending.line > start.line then 
+            local sx,sy = self:pop(start.char, c)
+            local ex,ey = self:pop(#line, c)
+
+            surface.DrawRect(sx, sy, math.max(ex - sx, self.font.w), self.font.h)
+        else
+            local ex,ey = self:pop(start.char, c)
+            local sx,sy = self:pop(0, c)
+
+            surface.DrawRect(sx, sy, math.max(ex - sx, self.font.w), self.font.h)
+        end
+    elseif ((i >= start.line and i <= ending.line) or (i <= start.line and i >= ending.line)) then -- All Lines inbetween Start and End of Selection  
+        local sx,sy = self:pop(0, c)
+        local ex,ey = self:pop(#line, c)
+
+        surface.DrawRect(sx, sy, math.max(ex - sx, self.font.w), self.font.h)
+    end
 end
 
 function self:PaintTokensAt(tokens, x, y, maxChars)
@@ -2270,11 +2435,11 @@ function self:PaintTokensAt(tokens, x, y, maxChars)
     for tokenIndex, token in ipairs(tokens) do 
         local txt = token.text
 
-        if token.type == "endofline" then
+        if token.type == "endofline" and self.textPos.char <= token.start then
             draw.SimpleText("⮯", self.font.n, x + lastY, y, self.colors.tabIndicators)
             break        
         elseif token.type == "error" then 
-            hasError = true 
+         --   hasError = true 
         end
 
         if token.ending < self.textPos.char or token.start > self.textPos.char + maxChars then 
@@ -2303,7 +2468,7 @@ function self:Paint(w, h)
     local c = 0
 
     local lineNumCharCount = self:GetLineNumberCharCount()
-    local lineNumWidth = self:GetLineNumberWidth()
+    local lineNumWidth     = self:GetLineNumberWidth()
 
     local visLines = self:VisibleLines() 
     local visChars = self:VisibleChars()
@@ -2314,6 +2479,8 @@ function self:Paint(w, h)
     draw.RoundedBox(0, 0, 0, x, h, self.colors.lineNumbersBackground)
     draw.RoundedBox(0, x, 0, 1, h, self.colors.linesEditorDivider)
 
+    local currentHover
+
     local bruh = 1
     while i < self.textPos.line + visLines do 
         if bruh > #self.data.context * 2 then print("COCK") break end bruh = bruh + 1 
@@ -2323,21 +2490,24 @@ function self:Paint(w, h)
 
         -- Line Numbers 
         draw.SimpleText(cLine.index, self.font.n, offset + lineNumWidth * ((lineNumCharCount - #tostring(cLine.index)) / lineNumCharCount), c * self.font.h, self.colors.lineNumbers)
-        
-        local hasError = false 
 
         -- Caret 
         if cLine.index == self.caret.line then
             draw.RoundedBox(0, 0, c * self.font.h, self:GetWide(), self.font.h, self.colors.currentLine)
 
             if self.caret.char + self.textPos.char >= self.textPos.char then 
-                draw.RoundedBox(0, textoffset + x + self.font.w * self.caret.char,c * self.font.h, 2, self.font.h, self.colors.caret)
+                draw.RoundedBox(0, textoffset + x + self.font.w * (self.caret.char - self.textPos.char + (self.textPos.char > 0 and 1 or 0)),c * self.font.h, 2, self.font.h, self.colors.caret)
             end 
         else 
             self.data:TrimRight(i)
         end
 
+        -- This does the Syntax Coloring
         self:PaintTokensAt(cLine.tokens, textoffset + x, c * self.font.h, visChars)  
+
+        if self:IsSelecting() == true then 
+            self:Highlight(self.selection.start, self.selection.ending, i, c)
+        end
 
         local skips = 0
 
@@ -2347,6 +2517,8 @@ function self:Paint(w, h)
             cLine.button:SetPos(x - offset + offset * 0.15, c * self.font.h + (self.font.h / 2 - cLine.button:GetTall() / 2) - 4)
 
             if cLine.button:IsHovered() == true then 
+                currentHover = {cLine, i}
+
                 if #cLine.folding.folds == 0 then -- When unfolded, show the area that will be folded 
                     draw.RoundedBox(0, x, (c + 1) * self.font.h, w, self.font.h * cLine.folding.available, self.colors.foldingAreaIndicator)
                 else -- If its folded and button is hovered, show the text that could get unfolded 
@@ -2359,10 +2531,11 @@ function self:Paint(w, h)
                         local lf = l.folding
 
                         if lf and #lf.folds > 0 then 
-                            draw.SimpleText(" < " .. #lf.folds .. " Line" .. (#lf.folds > 1 and "s" or "") .. " folded >", self.font.n, x + (l.tokens[#l.tokens].ending + 1) * self.font.w, (c + i) * self.font.h, self.colors.amountOfFoldedLines)
+                            draw.SimpleText(" < " .. #lf.folds .. " Line" .. (#lf.folds > 1 and "s" or "") .. " hidden >", self.font.n, x + (l.tokens[#l.tokens].ending + 1) * self.font.w, (c + i) * self.font.h, self.colors.amountOfFoldedLines)
                             draw.RoundedBox(0, x, (c + i + 1) * self.font.h, self:GetWide() - x, 1, self.colors.foldingIndicator) 
                         end
 
+                        -- Color the folded lines preview 
                         self:PaintTokensAt(cLine.folding.folds[i].tokens, textoffset + x, (c + i) * self.font.h, visChars)  
                     end
 
@@ -2370,22 +2543,21 @@ function self:Paint(w, h)
                     draw.RoundedBox(0, 0, (c + len + 1) * self.font.h, self:GetWide(), 1, self.colors.foldingIndicator)
 
                     c = c + len 
-
                     skips = len 
                 end
             elseif isFolding(cLine) == true then -- WHen folded but not hovered, show where the fold is 
-                draw.SimpleText(" < " .. #cLine.folding.folds .. " Line" .. (#cLine.folding.folds > 1 and "s" or "") .. " folded >", self.font.n, x + (cLine.tokens[#cLine.tokens].ending + 1) * self.font.w, c * self.font.h, self.colors.amountOfFoldedLines)
+                draw.SimpleText(" < " .. #cLine.folding.folds .. " Line" .. (#cLine.folding.folds > 1 and "s" or "") .. " hidden >", self.font.n, x + (cLine.tokens[#cLine.tokens].ending + 1) * self.font.w, c * self.font.h, self.colors.amountOfFoldedLines)
 
-                draw.RoundedBox(0, x, c * self.font.h, w, self.font.h, self.colors.foldingAreaIndicator)
+                if not currentHover 
+                or IsValid(currentHover[1].button) == false 
+                or (IsValid(currentHover[1].button) == true and (i <= currentHover[2] or currentHover[2] + currentHover[1].folding.available <= i)) then  
+                    draw.RoundedBox(0, x, c * self.font.h, w, self.font.h, self.colors.foldingAreaIndicator) -- We dont want the indicators to overlap in the case of a fold inside a hovered fold
+                end 
+
                 draw.RoundedBox(0, 0, (c + 1) * self.font.h, self:GetWide(), 1, self.colors.foldingIndicator)
             end
         elseif cLine.button ~= nil then self.data.context[i].button = nil
         elseif IsValid(cLine.button) and cLine.folding and cLine.folding.folds then self:HandleBadButton(cLine.button) end 
-
-        -- Tab Indicators
-        if self.data.profile.language ~= "Plain" then 
-
-        end 
 
         do -- Tab Indicators 
             local tab = self.allTabs[cLine.index + skips]
@@ -2403,6 +2575,11 @@ function self:Paint(w, h)
                     draw.RoundedBox(0, x + posX, c * self.font.h, 1, self.font.h, self.colors.tabIndicators)
                 end
             end
+        end 
+
+        -- Tab Indicators
+        if self.data.profile.language ~= "Plain" then 
+
         end 
 
         i = i + 1
@@ -2451,9 +2628,7 @@ function self:OnMouseWheeled(delta)
 end
 
 function self:Think()
-    local scroll = self.scroller:GetScroll() 
-    self.textPos.line = math.ceil(scroll + 1)
-    self.scroller:SetScroll(scroll)
+    self.textPos:Set()
 
     if self.textPos.line ~= self.lastTextPos.line then 
         self:_OnScrolled(self.textPos.line - self.lastTextPos.line)
@@ -2462,6 +2637,11 @@ function self:Think()
     if RealTime() > self.refresh then 
         self:RefreshData()
         self:TimeRefresh(10)
+    end
+
+    if input.IsMouseDown(MOUSE_LEFT) == true and vgui.GetHoveredPanel() == self and self.scroller.Dragging == false then 
+        self:SetCaret(self:pit(self:LocalCursorPos()))
+        self:SetSelection(self.selection.start.char, self.selection.start.line, self.caret.char, self.caret.actualLine)
     end
 
     self.lastTextPos = table.Copy(self.textPos)
@@ -2475,7 +2655,7 @@ function self:MakeFoldButton()
         bFont = {
             font      = "Consolas",
             size      = 35,
-            weight    = 500 
+            weight    = 550 
         }
         surface.CreateFont("SSLEFoldButtonFont", bFont)
     end
@@ -2486,6 +2666,7 @@ function self:MakeFoldButton()
     button.Paint = function()
         button:SetTextColor((button:IsHovered() or button.foldStatus == true) and dark(160) or dark(110))
     end
+
     button.foldStatus = false 
     button.SetFolded = function(self, status)
         if status == true then 
@@ -2523,7 +2704,7 @@ local function open()
 	sb:Dock(FILL)
     sb:SetFont("Consolas", 16)
 
-    sb:SetText([[
+    sb:SetText([["
 while(1)
 {
 
@@ -2540,7 +2721,9 @@ while(1)
 }
 
         
-        
+"
+
+
         ]])
     sb:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
 end
