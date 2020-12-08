@@ -829,22 +829,6 @@ function DataContext:ConstructContextLine(i)
 
     if level == nil then level = 0 end 
 
-    if type(level) ~= "number" then 
-        if type(level) == "boolean" then 
-            level = 0
-        else 
-            local c = 2
-            local lc = getPrevContext(c)
-
-            while (lc.level or true) == false do  
-                lc = getPrevContext(c)
-                c = c + 1
-            end
-
-            level = lc.level or 0 
-        end 
-    end
-
     local countedLevel, offset = self:CountIndentation(temp.tokens)
 
     temp.offset = offset 
@@ -1006,8 +990,19 @@ function DataContext:EntryForReal(line)
     return recursiveSearch(self.context)
 end
 
-function DataContext:ParseArea(s, e)
-    local last = (self.context[s - 1] or {}).tokens or {}
+local function tokensSame(a, b)
+    if #a ~= #b then return false end 
+
+    for i = 1, #a, 1 do 
+        if a[i].text ~= b[i].text or a[i].type ~= b[i].type then return false end 
+    end
+
+    return true 
+end
+
+-- Only use this function to do simple parsing for only the tokens.
+function DataContext:SimpleAreaParse(s, e)
+    local last = self.context[s - 1] or {}
     local index = s 
 
     local function recursiveParse(collection, start, ending, inFolds)
@@ -1016,17 +1011,19 @@ function DataContext:ParseArea(s, e)
 
             if not entry then break end 
         
-            local newTokens = self:ParseRow(index, last or {}, collection[i].text or "")
+            local newTokens = self:ParseRow(index, (last or {}).tokens or {}, entry.text or "")
 
-            if inFolds == true and i == 1 and #newTokens == #entry.tokens then 
-                break -- We do this to determine wether a full parse is requiered, if the first folded line changes, then all the others are certainly gonna change too.
+            if inFolds == true and i == start and tokensSame(newTokens, entry.tokens) == true then -- We do this to determine wether a full parse is requiered, if the first folded line changes, then all the others are certainly gonna change too.
+                last = collection[#collection] -- save the last token to continue the part that was skipped 
+                index = index + #collection
+                break
             end
 
-            collection[i].tokens = newTokens 
+            entry.tokens = newTokens 
             
             index = index + 1
 
-            last = collection[i].tokens 
+            last = entry 
 
             if entry.folding and #entry.folding.folds > 0 then
                 recursiveParse(entry.folding.folds, 1, #entry.folding.folds, true)
@@ -1283,7 +1280,7 @@ do
 
                     for i, lineCache in pairs(E2Cache) do -- Need cache for every line so if something cached gets removed it can be updated
                         if i > lineIndex then continue end 
-                        if lineCache.userfunctions and lineCache.userfunctions[result] then 
+                        if lineCache[result] then 
                             return "userfunctions" 
                         end
                     end 
@@ -1434,9 +1431,7 @@ do
         onMatched = function(result, i, type, buffer, prevTokens) 
             if type == "userfunctions" then 
                 if not E2Cache[i] then E2Cache[i] = {} end 
-                if not E2Cache[i][type] then E2Cache[i][type] = {} end 
-                if not E2Cache[i][type][result] then E2Cache[i][type][result] = 0 end 
-                E2Cache[i][type][result] = E2Cache[i][type][result] + 1
+                E2Cache[i][result] = 1
             end
         end,
 
@@ -1510,7 +1505,8 @@ function self:Init()
     self.colors.endOfText = dark(150,5)
     self.colors.tabIndicators = Color(175,175,175,35)
     self.colors.caretAreaTabIndicator = Color(175,175,175,125)
-    self.colors.currentLine = dark(200,10)
+    self.colors.currentLine = dark(175,5)
+    self.colors.currentLineOutlines = dark(200,25)
 
     self.colors.foldingIndicator = dark(175,35)
     self.colors.foldingAreaIndicator = Color(100,150,180, 15)
@@ -1522,12 +1518,12 @@ function self:Init()
     self.caret = {
         x = 0,
         y = 0, 
-        char = 1,
+        char = 0,
         line = 1,
         actualLine = 1
     }
 
-    self.caretRegion = {-1,-1,-1}
+    self.caretRegion = {-1,-2,-3}
 
     self.highlights = {}
     self.selection = {
@@ -1542,7 +1538,7 @@ function self:Init()
     }
 
     self.textPos = {
-        char = 0,
+        char = 1,
         line = 1
     } 
     
@@ -1567,8 +1563,6 @@ function self:Init()
 
     self.foldButtons = {}
 
-    self.highlights = {}
-
     self.allTabs = {}
 
     self.undo = {}
@@ -1579,6 +1573,7 @@ function self:Init()
     self.data = table.Copy(DataContext)
 
     self.data.LineFolded = function(_, line, len)
+        self:ResetBGProg()
         self:GetTabLevels()
 
         if self.caret.actualLine <= line + len then return end
@@ -1586,6 +1581,7 @@ function self:Init()
     end
 
     self.data.LineUnfolded = function(_, line, len)
+        self:ResetBGProg()
         self:GetTabLevels()
 
         if self.caret.actualLine <= line then return end 
@@ -1682,7 +1678,144 @@ function self:Init()
 
     self:SetFont("Consolas", 16)
 
+    self.runBackgroundWorker = false  
+    self.bgLineCounter = 1
+    self.bgSuperHistory = {}
+    self.bgLast = {}
+
     self:SetCursor("beam")
+end
+
+function self:InitBackgroundWorker() -- Initializes the background thread, this thread will constantly loop through the lines to make sure everything is in correct order.
+    self.runBackgroundWorker = true 
+
+    self.bgLast = {}
+
+    self.backgroundWorker = coroutine.create(function() -- DO NOT TOUCH THIS UNDER ANY CIRCUMSTANCES ANY BUG WILL CAUSE A FREEZE
+        local function reset()
+            self.bgSuperHistory = {{collection=self.data.context,counter=1}}
+            self.bgLineCounter = 1 
+            self.bgLast = {}
+        end
+
+        reset()
+
+        local function reload()
+            self.bgLineCounter = 1
+            self.bgLast = {} 
+        end
+
+        while self.runBackgroundWorker == true do 
+            if IsValid(self) == false then break end 
+
+            if not self.bgSuperHistory or #self.bgSuperHistory == 0 then -- insurance incase something fucks up
+                reset() 
+                coroutine.wait(0.1)
+            end 
+
+            if self:IsVisible() == false then -- If its not visible, why parse?
+                coroutien.wait(1)
+                continue 
+            end
+
+            local entry = self.bgSuperHistory[#self.bgSuperHistory]
+
+            if not entry then 
+                reset() 
+                coroutine.wait(0.1)
+                continue 
+            end
+
+            if entry.counter > #entry.collection then
+                if #self.bgSuperHistory > 1 then 
+                    table.remove(self.bgSuperHistory) -- just remove it, dont need to reset the counter in that case
+                    entry = self.bgSuperHistory[#self.bgSuperHistory]
+                else 
+                    entry.counter = 1
+                    reload()
+                    coroutine.wait(0.1)
+                    continue 
+                end 
+            end
+
+            local item = entry.collection[entry.counter] 
+
+            item.index = self.bgLineCounter 
+            item.tokens = self.data:ParseRow(self.bgLineCounter, self.bgLast.tokens or {}, item.text or "") 
+
+            local countedLevel, offset = self.data:CountIndentation(item.tokens or {})
+            
+            item.offset = offset 
+            item.nextLineIndentationOffsetModifier = countedLevel + (self.bgLast.nextLineIndentationOffsetModifier or 0)
+            item.level = math.max((self.bgLast.nextLineIndentationOffsetModifier or 0) + math.min(countedLevel, 0), 0)
+
+            item = item or {}
+
+            self.bgLineCounter = self.bgLineCounter + 1
+
+            if self.bgLineCounter > #self.data.context then 
+                reset()
+                coroutine.wait(0.05)
+                continue 
+            end
+
+            entry.counter = entry.counter + 1
+
+            self.bgLast = item
+
+            if item.folding and #item.folding.folds > 0 then 
+                table.insert(self.bgSuperHistory, {
+                    collection = item.folding.folds, 
+                    counter = 1
+                })
+            end
+
+            if self.bgLineCounter % 100 == 0 then 
+                coroutine.wait(0.05)
+            end 
+        end
+    end)
+
+    coroutine.resume(self.backgroundWorker)
+end
+
+function self:ContinueBackgroundWorker()
+    if not self.data.context or #self.data.context == 0 or self.stopBGWorker == true then return end 
+
+    if not self.backgroundWorker then 
+        self:InitBackgroundWorker()
+        return 
+    end
+
+    if coroutine.status(self.backgroundWorker) == "suspended" or (self.backgroundWorker ~= nil and coroutine.status(self.backgroundWorker) ~= "running") then 
+        coroutine.resume(self.backgroundWorker)
+    elseif coroutine.status(self.backgroundWorker) == "dead" and not self.backgroundWorker then 
+        self:ResetBGProg()
+    end
+end
+
+function self:ResetBGProg(newProg)
+    if not self.backgroundWorker then 
+        self:InitBackgroundWorker()
+        return 
+    end
+    
+    if coroutine.status(self.backgroundWorker) ~= "dead" then
+        self.bgLineCounter = newProg or 1
+        self.bgLast = self.data.context[self.bgLineCounter - 1] or {}
+        self.bgSuperHistory = {{collection=self.data.context,counter=1}}
+    end
+end
+
+function self:KillBGWorker()
+    if not self.backgroundWorker then return end 
+    if coroutine.status(self.backgroundWorker) ~= "dead" then
+        self.bgLineCounter = 1
+        self.bgLast = {}
+        self.bgSuperHistory = {{collection=self.data.context,counter=1}}
+        self.runBackgroundWorker = false 
+        self.backgroundWorker = nil 
+    end
 end
 
 function self:GetTab()
@@ -1698,38 +1831,6 @@ function self:HandleBadButton(v)
     end 
 
     v:SetVisible(false) 
-end
-
--- Bad Function, scrap and replace with hidebuttons
-function self:CollectBadButtons()
-    for k, v in pairs(self.foldButtons) do 
-        if IsValid(v) == false then 
-            if v.super then 
-                v.super.button = nil 
-                if v.super.folding and #v.super.folding.folds > 0 then 
-                    self.data:UnfoldLine(self:KeyForIndex(v.super.index))
-                end
-            end
-
-            self.foldButtons[k] = nil 
-
-            continue 
-        elseif IsValid(v) == true and not v.super then 
-
-            v:Remove()
-            self.foldButtons[k] = nil 
-
-            continue 
-        end 
-
-        if v.folding and #v.folding.folds > 0 then 
-            v:SetFolded(true) 
-        else 
-            v:SetFolded(false)
-        end
-
-        v:SetVisible(false) 
-    end
 end
 
 function self:SetSelection(...)
@@ -1763,8 +1864,14 @@ function self:SetSelection(...)
     }
 end 
 
-function self:SetSelectionEnd(t)
-    self.selection.ending = table.Copy(t) 
+function self:SetSelectionEnd(t, lol)
+    if type(t) == "table" then 
+        self.selection.ending = table.Copy(t)
+        return 
+    end  
+
+    self.selection.ending.char = t
+    self.selection.ending.line = lol 
 end
 
 function self:IsSelecting()
@@ -1821,6 +1928,7 @@ function self:TextChanged()
     self:ParseVisibleLines()
     self:GetTabLevels()
     self:HideButtons()
+   -- self:ResetBGProg()
 end 
 
 function self:_TextChanged() 
@@ -1868,13 +1976,14 @@ function self:_KeyCodePressed(code)
 
     local left, right = getLR(line.text, self.caret.char) 
 
-    local savedCaret = self:IsShift() == true and table.Copy(self.caret) or nil 
+    local savedCaret = table.Copy(self.caret or {}) 
+
     local function handleSelection()
         if self:IsShift() == true then 
             if self:IsSelecting() == false then 
-                self:SetSelection(savedCaret, self.caret)
+                self:SetSelection(savedCaret.char, savedCaret.actualLine, self.caret.char, self.caret.actualLine)
             else 
-                self:SetSelectionEnd(self.caret)
+                self:SetSelectionEnd(self.caret.char, self.caret.actualLine)
             end
         else 
             self:ResetSelection()
@@ -2182,13 +2291,9 @@ function self:RefreshData() -- As insurance we refresh some of the "bugheavy" st
     self.data:GetGlobalFoldingAvailability()
 end
 
-function self:TokenizeArea(start, ending)
-    self.data:ParseArea(start, ending)
-end
-
 function self:ParseVisibleLines()
     if self:IsVisible() == false then return end  
-    self.data:ParseArea(self.textPos.line , (self.textPos.line + self:VisibleLines()))
+    self.data:SimpleAreaParse(self.textPos.line , (self.textPos.line + self:VisibleLines()))
 end
 
 function self:PosInText(...) return self:pit(...) end 
@@ -2222,7 +2327,7 @@ function self:pop(...) -- short for pos on panel. Converts a position in the tex
 
     local char, line = select(1, ...), select(2, ...)
 
-    local x = (char - self.textPos.char + (self.textPos.char > 0 and 1 or 0)) * self.font.w 
+    local x = (char - self.textPos.char + 1) * self.font.w 
     local y = line * self.font.h 
 
     x = x + offset * 2 + self:GetLineNumberWidth() + textoffset 
@@ -2493,10 +2598,12 @@ function self:Paint(w, h)
 
         -- Caret 
         if cLine.index == self.caret.line then
+            draw.RoundedBox(0, 0, c * self.font.h, self:GetWide(), 1, self.colors.currentLineOutlines)
             draw.RoundedBox(0, 0, c * self.font.h, self:GetWide(), self.font.h, self.colors.currentLine)
+            draw.RoundedBox(0, 0, (c + 1) * self.font.h, self:GetWide(), 1, self.colors.currentLineOutlines)
 
             if self.caret.char + self.textPos.char >= self.textPos.char then 
-                draw.RoundedBox(0, textoffset + x + self.font.w * (self.caret.char - self.textPos.char + (self.textPos.char > 0 and 1 or 0)),c * self.font.h, 2, self.font.h, self.colors.caret)
+                draw.RoundedBox(0, textoffset + x + self.font.w * (self.caret.char - self.textPos.char + 1),c * self.font.h, 2, self.font.h, self.colors.caret)
             end 
         else 
             self.data:TrimRight(i)
@@ -2505,8 +2612,16 @@ function self:Paint(w, h)
         -- This does the Syntax Coloring
         self:PaintTokensAt(cLine.tokens, textoffset + x, c * self.font.h, visChars)  
 
+        -- Selection 
         if self:IsSelecting() == true then 
             self:Highlight(self.selection.start, self.selection.ending, i, c)
+        end
+
+        -- Highlights
+        if #self.highlights > 0 then 
+            for _, v in ipairs(self.highlights) do 
+                self:Highlight(v.start, v.ending, i, c)
+            end
         end
 
         local skips = 0
@@ -2520,7 +2635,7 @@ function self:Paint(w, h)
                 currentHover = {cLine, i}
 
                 if #cLine.folding.folds == 0 then -- When unfolded, show the area that will be folded 
-                    draw.RoundedBox(0, x, (c + 1) * self.font.h, w, self.font.h * cLine.folding.available, self.colors.foldingAreaIndicator)
+                    draw.RoundedBox(0, x, (c + 1) * self.font.h, w, self.font.h * (cLine.folding.available or 0), self.colors.foldingAreaIndicator)
                 else -- If its folded and button is hovered, show the text that could get unfolded 
                     local len = math.min(#cLine.folding.folds, visLines - c - 1)
 
@@ -2644,6 +2759,8 @@ function self:Think()
         self:SetSelection(self.selection.start.char, self.selection.start.line, self.caret.char, self.caret.actualLine)
     end
 
+    self:ContinueBackgroundWorker()
+
     self.lastTextPos = table.Copy(self.textPos)
 end
 
@@ -2725,7 +2842,8 @@ while(1)
 
 
         ]])
-    sb:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
+  --  sb:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
+  sb:SetText(file.Read("expression2/libraries/e2parser_v2.txt", "DATA"))
 end
 
 concommand.Add("sopen", function( ply, cmd, args )
