@@ -550,40 +550,32 @@ end
 function DataContext:SmartFolding(startLine) -- Uses Whitespace differences to detect folding
     if not self.context[startLine] then return end 
 
-    local function peekNextFilledLine(start, minLen)
-        start = start + 1
-        while self.context[start] and (string.gsub((self.context[start] or {}).text or "", "%s", "") == "") do  
-            if minLen and getLeftLen(self.context[start].text) < minLen then break end 
-            start = start + 1
-        end
-        return self.context[start], start
-    end
-
     if string.gsub(self.context[startLine].text, "%s", "") == "" then return end 
 
     local startLeft = getLeftLen(self.context[startLine].text)               
     local nextLeft  = getLeftLen((self.context[startLine + 1] or {}).text)     
 
+    local function peekNextFilledLine(start, minLen)
+        start = start + 1
+
+        while self.context[start] and (string.gsub((self.context[start] or {}).text or "", "%s", "") == "") do  
+            if minLen and getLeftLen(self.context[start].text) < minLen then break end 
+            start = start + 1
+        end
+
+        return self.context[start], start
+    end
+
     if nextLeft <= startLeft then -- If its smaller, then check if its a whitespace line, if yes, skip all of them until the first filled comes up, then check again.
         local nextFilled, lookup = peekNextFilledLine(startLine, nextLeft)
 
-        if lookup - 1 == startLine then return end 
+        if not nextFilled or lookup - 1 == startLine then return end 
 
         startLine = lookup
-        nextLeft = getLeftLen((self.context[startLine] or {}).text)     
+        nextLeft = getLeftLen(nextFilled.text)     
     
         if nextLeft <= startLeft then return end 
     end 
-    
-    do
-        local c = startLine - 1
-        local prev = self.context[c]
-        while prev and string.gsub(prev.text, "%s", "") == "" do  
-            c = c - 1
-            prev = self.context[c]
-        end
-        if getLeftLen((prev or {}).text or "") > nextLeft then return end 
-    end
 
     startLine = startLine + 2 
 
@@ -596,6 +588,7 @@ function DataContext:SmartFolding(startLine) -- Uses Whitespace differences to d
 
         if currentLeft < nextLeft then 
             local nextReal = peekNextFilledLine(startLine)
+
             if not nextReal or (nextReal.text ~= "" and getLeftLen(nextReal.text) < nextLeft) then 
                 return startLine - 2
             end  
@@ -651,41 +644,11 @@ function DataContext:FindMatchUp(tokenIndex, lineIndex)
     return curToken, tokenIndex, lineIndex
 end 
 
-function DataContext:RefreshFoldingForLine(lineIndex, trigger)
-    if not lineIndex then return false end 
-    local line = self.context[lineIndex]
-    if not line then return false end 
-    if line.folding and #line.folding.folds > 0 then return false end 
-
-    if trigger == nil then trigger = true end 
-
-    local endline = self:SmartFolding(lineIndex)
-
-    if endline then 
-        diff = endline - lineIndex + 1
-
-        if diff ~= 0 then 
-            self.context[lineIndex].folding = {
-                available = diff,
-                folds = {}
-            }
-
-            if trigger == true then 
-                self:FoldingAvailbilityFound(lineIndex, diff)
-            end 
-
-            return true 
-        end 
-    end
-
-    return false 
-end
-
 function DataContext:GetGlobalFoldingAvailability()
     self:FoldingAvailbilityCheckStarted()
 
     for lineIndex, contextLine in pairs(self.context) do 
-        self:RefreshFoldingForLine(lineIndex)
+        self:ValidateFoldingAvailability(lineIndex)
     end
 
     self:FoldingAvailbilityCheckCompleted()
@@ -711,7 +674,7 @@ function DataContext:FoldLine(i)
 
     if not t.folding or self:IsFolding(t) == true then return end 
 
-    self:RefreshFoldingForLine(i, false)
+    if self:ValidateFoldingAvailability(i) == false then return end 
 
     for n = i + 1, i + t.folding.available, 1 do 
         local v = self.context[n]
@@ -764,7 +727,7 @@ function DataContext:UnfoldLine(i)
 
     self:FixIndeces()
 
-    self:RefreshFoldingForLine(i, false)
+    self:ValidateFoldingAvailability(i)
 
     self:LineUnfolded(i, len)
 
@@ -885,16 +848,20 @@ function DataContext:ValidateFoldingAvailability(i, trigger)
     local endline = self:SmartFolding(i)
 
     if self.context[i].folding then -- If already has been detected as a foldable line, check if its REALLY foldable. if yes, check if the new foldable data is same or not 
+        if #self.context[i].folding.folds > 0 then return false end 
+
         local function wipe()
             self:UnfoldLine(i)
+
             if self.context[i].button then 
                 self.context[i].button:Remove()
             end 
+
             self.context[i].folding = nil    
         end
 
         if not endline then 
-            wipe()
+           wipe()
             return false 
         end 
 
@@ -911,6 +878,8 @@ function DataContext:ValidateFoldingAvailability(i, trigger)
 
         return true  
     elseif endline then -- It has not yet been detected as foldable but is foldable, make it one!
+        local avFolds = endline - i + 1 
+
         self.context[i].folding = {
             available = avFolds,
             folds = {}
@@ -931,8 +900,7 @@ function DataContext:FixFolding(i)
 
     while self.context[i] do  
         if self.context[i].folding then  
-            self:RefreshFoldingForLine(i)
-            break 
+            if self:ValidateFoldingAvailability(i) == true then break end 
         end 
         i = i - 1
     end
@@ -1038,6 +1006,28 @@ end
 
 local prof = {}
 
+local function isUpper(char)  
+    if not char or char == "" then return false end 
+    local n = string.byte(char)
+    return n >= 65 and n <= 90 
+end
+
+local function isLower(char)  
+    if not char or char == "" then return false end 
+    local n = string.byte(char)
+    return n >= 97 and n <= 122 
+end
+
+local function isNumber(char) 
+    if not char or char == "" then return false end 
+    local n = string.byte(char)
+    return n >= 48 and n <= 57 
+end
+
+local function isSpecial(char)
+    return isNumber(char) == false and isLower(char) == false and isUpper(char) == false 
+end 
+
 do 
     local keywords = {
         ["if"]       = 1,
@@ -1055,28 +1045,6 @@ do
         ["local"]    = 1,
         ["function"] = 1
     }
-    
-    local function isUpper(char)  
-        if not char or char == "" then return false end 
-        local n = string.byte(char)
-        return n >= 65 and n <= 90 
-    end
-    
-    local function isLower(char)  
-        if not char or char == "" then return false end 
-        local n = string.byte(char)
-        return n >= 97 and n <= 122 
-    end
-    
-    local function isNumber(char) 
-        if not char or char == "" then return false end 
-        local n = string.byte(char)
-        return n >= 48 and n <= 57 
-    end
-    
-    local function isSpecial(char)
-        return isNumber(char) == false and isLower(char) == false and isUpper(char) == false 
-    end 
     
     local E2Cache = {}
     
@@ -1124,15 +1092,13 @@ do
         indentation = 
         {
             open = {
-                ["{"]=1, 
-                ["%("]=1, 
-                ["%["]=1
+                "{", 
+                "("
             },
 
             close = {
-                ["}"]=1, 
-                ["%)"]=1, 
-                ["%]"]=1
+                "}",
+                ")"
             },
 
             offsets = {
@@ -1489,6 +1455,15 @@ local textoffset = 3
 
 local function mSub(x, strength) return x - (math.floor(x) % strength) end
 
+local function tableSame(a, b)
+    if not a and not b then return true end -- both are nil, lol 
+    if not a or not b then return false end 
+    for k, v in pairs(a) do 
+        if not b[k] or b[k] ~= v then return false end     
+    end
+    return true 
+end
+
 AccessorFunc(self, "tabSize", "TabSize", FORCE_NUMBER)
 AccessorFunc(self, "colors", "Colors")
 
@@ -1500,7 +1475,7 @@ function self:Init()
     self.colors.lineNumbersBackground = dark(55)
     self.colors.linesEditorDivider = Color(240,130,0, 100)
     self.colors.lineNumbers = Color(240,130,0)
-    self.colors.highlights = Color(0,60,220,50)
+    self.colors.highlights = Color(0,60,220,80)
     self.colors.caret = Color(25,175,25)
     self.colors.endOfText = dark(150,5)
     self.colors.tabIndicators = Color(175,175,175,35)
@@ -1522,6 +1497,8 @@ function self:Init()
         line = 1,
         actualLine = 1
     }
+    self.lastCaret = table.Copy(self.caret)
+    self.lastCaret.char = -1 
 
     self.caretRegion = {-1,-2,-3}
 
@@ -1560,6 +1537,7 @@ function self:Init()
     }
 
     self.refresh = 0
+    self.mouseCounter = 0
 
     self.foldButtons = {}
 
@@ -1593,6 +1571,7 @@ function self:Init()
     end
     self.data.FoldingAvailbilityFound = function(_, i, len, t)
         local b = self:MakeFoldButton()
+
         b.super = self.data.context[i]
         b.isHovered = false 
         b.Think = function(self)
@@ -1601,10 +1580,11 @@ function self:Init()
             end
 
             if self:IsHovered() == true and self.isHovered == false then 
-                super.data:RefreshFoldingForLine(i, false)
+                super.data:ValidateFoldingAvailability(i)
                 self.isHovered = true
             elseif self:IsHovered() == false then self.isHovered = false end  
         end
+
         b.DoClick = function(_)
             local super = b.super 
 
@@ -1628,6 +1608,12 @@ function self:Init()
                     self:HideButtons()
                     return 
                 end 
+
+                if not l.folding.available then 
+                    self:HideButtons()
+                    self.data:ValidateFoldingAvailability(i)
+                    return 
+                end
 
                 local limit = l.index + l.folding.available
 
@@ -1740,16 +1726,16 @@ function self:InitBackgroundWorker() -- Initializes the background thread, this 
 
             local item = entry.collection[entry.counter] 
 
-            item.index = self.bgLineCounter 
-            item.tokens = self.data:ParseRow(self.bgLineCounter, self.bgLast.tokens or {}, item.text or "") 
+            if item then 
+                item.index = self.bgLineCounter 
+                item.tokens = self.data:ParseRow(self.bgLineCounter, self.bgLast.tokens or {}, item.text or "") 
 
-            local countedLevel, offset = self.data:CountIndentation(item.tokens or {})
-            
-            item.offset = offset 
-            item.nextLineIndentationOffsetModifier = countedLevel + (self.bgLast.nextLineIndentationOffsetModifier or 0)
-            item.level = math.max((self.bgLast.nextLineIndentationOffsetModifier or 0) + math.min(countedLevel, 0), 0)
-
-            item = item or {}
+                local countedLevel, offset = self.data:CountIndentation(item.tokens or {})
+                
+                item.offset = offset 
+                item.nextLineIndentationOffsetModifier = countedLevel + (self.bgLast.nextLineIndentationOffsetModifier or 0)
+                item.level = math.max((self.bgLast.nextLineIndentationOffsetModifier or 0) + math.min(countedLevel, 0), 0)
+            end
 
             self.bgLineCounter = self.bgLineCounter + 1
 
@@ -1809,6 +1795,7 @@ end
 
 function self:KillBGWorker()
     if not self.backgroundWorker then return end 
+
     if coroutine.status(self.backgroundWorker) ~= "dead" then
         self.bgLineCounter = 1
         self.bgLast = {}
@@ -1836,9 +1823,9 @@ end
 function self:SetSelection(...)
     local startChar, startLine, endingChar, endingLine = select(1, ...), select(2, ...), select(3, ...), select(4, ...)
 
-    if not startChar then return end 
+    if startChar == nil then return end 
 
-    if type(startChar) == "table" and not startLine then 
+    if type(startChar) == "table" and startLine == nil then 
         self.selection.start = table.Copy(startChar)
         self.selection.ending = table.Copy(startChar)
         return 
@@ -1846,7 +1833,7 @@ function self:SetSelection(...)
         self.selection.start = table.Copy(startChar)
         self.selection.ending = table.Copy(startLine) 
         return 
-    elseif type(startChar) == "number" and type(startLine) == "number" and not endingChar then 
+    elseif type(startChar) == "number" and type(startLine) == "number" and endingChar == nil then 
         endingChar = startChar 
         endingLine = startLine  
     end
@@ -2388,9 +2375,58 @@ function self:SetCaret(...)
 
     self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
 
+    self.data:ValidateFoldingAvailability(self.caret.actualLine) 
+
     self:Goto()
 
     return self.caret.line, self.caret.char 
+end
+
+function self:WordAtPoint(char, line)
+    if not char or not line then return end 
+
+    local item = self.data.context[line]
+    if not item then return end 
+
+    item = item.text 
+
+    local firstChar = item[char]
+
+    if not firstChar then return end 
+
+    if firstChar == " " then 
+        for i = char - 1, 0, -1 do 
+            local c = item[i] 
+            if not c or c ~= " " then 
+                local a, b, c = string.find(item, "(%s+)", i + 1)
+                if a and b then 
+                    return (a - 1), b, (c or string.sub(item, a, b))
+                end 
+            end
+        end 
+    else  
+        if isSpecial(firstChar) == true then 
+            for i = char - 1, 0, -1 do
+                local c = item[i] 
+                if not c or isSpecial(c) == false or string.gsub(c, "%s", "") == "" then 
+                    local a, b, c = string.find(item, "(%p+)", i + 1)
+                    if a and b then 
+                        return (a - 1), b, (c or string.sub(item, a, b))
+                    end 
+                end 
+            end
+        else 
+            for i = char - 1, 0, -1 do
+                local c = item[i] 
+                if not c or isSpecial(c) == true or string.gsub(c, "%s", "") == "" then 
+                    local a, b, c = string.find(item, "([^ %p]+)", i + 1)
+                    if a and b then 
+                        return (a - 1), b, (c or string.sub(item, a, b))
+                    end 
+                end 
+            end 
+        end
+    end 
 end
 
 function self:OnMouseClick(code) end 
@@ -2399,10 +2435,40 @@ function self:OnMousePressed(code)
 
     if code == MOUSE_LEFT then 
         self:SetCaret(self:pit(self:LocalCursorPos()))
-        self:SetSelection(self.caret.char, self.caret.actualLine)
+        
+        local line = self.data.context[self.caret.actualLine]
+
+        ::redo:: 
+
+        if line and tableSame(self.caret, self.lastCaret) == true then 
+
+            if self.mouseCounter == 1 then 
+                local start, ending, word = self:WordAtPoint(self.caret.char, self.caret.actualLine)
+
+                if not start then 
+                    self.mouseCounter = self.mouseCounter + 1
+                    goto redo
+                end
+
+                self:SetSelection(start, self.caret.actualLine, ending, self.caret.actualLine)
+            elseif self.mouseCounter == 2 then 
+                self:SetSelection(0, self.caret.actualLine, #line.text, self.caret.actualLine)
+            else 
+                self:ResetSelection()
+            end
+
+            self.mouseCounter = self.mouseCounter + 1
+            
+            if self.mouseCounter > 2 then self.mouseCounter = 0 end 
+        else
+            self:SetSelection(self.caret.char, self.caret.actualLine)
+            self.mouseCounter = 1
+        end 
     elseif code == MOUSE_RIGHT then 
 
     end
+
+    self.lastCaret = table.Copy(self.caret)
 
     if self.entry:HasFocus() == false then self.entry:RequestFocus() end 
 end
@@ -2583,7 +2649,7 @@ function self:Paint(w, h)
     -- Backgrounds 
     draw.RoundedBox(0, 0, 0, x, h, self.colors.lineNumbersBackground)
     draw.RoundedBox(0, x, 0, 1, h, self.colors.linesEditorDivider)
-
+    
     local currentHover
 
     local bruh = 1
@@ -2636,6 +2702,8 @@ function self:Paint(w, h)
 
                 if #cLine.folding.folds == 0 then -- When unfolded, show the area that will be folded 
                     draw.RoundedBox(0, x, (c + 1) * self.font.h, w, self.font.h * (cLine.folding.available or 0), self.colors.foldingAreaIndicator)
+                    draw.RoundedBox(0, x, (c + 1) * self.font.h, self:GetWide() - x, 1, self.colors.foldingIndicator)
+                    draw.RoundedBox(0, x, (c + 1 + (cLine.folding.available or 0)) * self.font.h, self:GetWide() - x, 1, self.colors.foldingIndicator)
                 else -- If its folded and button is hovered, show the text that could get unfolded 
                     local len = math.min(#cLine.folding.folds, visLines - c - 1)
 
@@ -2646,7 +2714,7 @@ function self:Paint(w, h)
                         local lf = l.folding
 
                         if lf and #lf.folds > 0 then 
-                            draw.SimpleText(" < " .. #lf.folds .. " Line" .. (#lf.folds > 1 and "s" or "") .. " hidden >", self.font.n, x + (l.tokens[#l.tokens].ending + 1) * self.font.w, (c + i) * self.font.h, self.colors.amountOfFoldedLines)
+                            draw.SimpleText(" < " .. #lf.folds .. " Line" .. (#lf.folds > 1 and "s" or "") .. " hidden >", self.font.n, x + math.max(cLine.tokens[#cLine.tokens].ending + 1 - self.textPos.char, 0) * self.font.w, (c + i) * self.font.h, self.colors.amountOfFoldedLines)
                             draw.RoundedBox(0, x, (c + i + 1) * self.font.h, self:GetWide() - x, 1, self.colors.foldingIndicator) 
                         end
 
@@ -2661,11 +2729,11 @@ function self:Paint(w, h)
                     skips = len 
                 end
             elseif isFolding(cLine) == true then -- WHen folded but not hovered, show where the fold is 
-                draw.SimpleText(" < " .. #cLine.folding.folds .. " Line" .. (#cLine.folding.folds > 1 and "s" or "") .. " hidden >", self.font.n, x + (cLine.tokens[#cLine.tokens].ending + 1) * self.font.w, c * self.font.h, self.colors.amountOfFoldedLines)
+                draw.SimpleText(" < " .. #cLine.folding.folds .. " Line" .. (#cLine.folding.folds > 1 and "s" or "") .. " hidden >", self.font.n, x + math.max(cLine.tokens[#cLine.tokens].ending + 1 - self.textPos.char, 0) * self.font.w, c * self.font.h, self.colors.amountOfFoldedLines)
 
                 if not currentHover 
                 or IsValid(currentHover[1].button) == false 
-                or (IsValid(currentHover[1].button) == true and (i <= currentHover[2] or currentHover[2] + currentHover[1].folding.available <= i)) then  
+                or (IsValid(currentHover[1].button) == true and (i <= currentHover[2] or currentHover[2] + (currentHover[1].folding.available or 0) <= i)) then  
                     draw.RoundedBox(0, x, c * self.font.h, w, self.font.h, self.colors.foldingAreaIndicator) -- We dont want the indicators to overlap in the case of a fold inside a hovered fold
                 end 
 
@@ -2754,7 +2822,7 @@ function self:Think()
         self:TimeRefresh(10)
     end
 
-    if input.IsMouseDown(MOUSE_LEFT) == true and vgui.GetHoveredPanel() == self and self.scroller.Dragging == false then 
+    if input.IsMouseDown(MOUSE_LEFT) == true and vgui.GetHoveredPanel() == self and self.scroller.Dragging == false and self.mouseCounter == 1 then 
         self:SetCaret(self:pit(self:LocalCursorPos()))
         self:SetSelection(self.selection.start.char, self.selection.start.line, self.caret.char, self.caret.actualLine)
     end
