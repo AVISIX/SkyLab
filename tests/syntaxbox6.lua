@@ -2020,6 +2020,13 @@ function self:_KeyCodePressed(code)
         end 
     end
 
+    if self:IsCtrl() and code == KEY_C then 
+        if self:IsSelecting() == true then 
+            SetClipboardText(self:GetTextArea(self.selection.start, self.selection.ending))
+        end 
+        return 
+    end
+
     if code == KEY_DOWN then
         self:SetCaret(self.caret.char, self.caret.line + 1, true)
         handleSelection()
@@ -2382,6 +2389,69 @@ function self:SetCaret(...)
     self:Goto()
 
     return self.caret.line, self.caret.char 
+end
+
+function self:GetTextArea(startChar, startLine, endChar, endLine)
+    if not startChar then return end 
+
+    if type(startChar) == "table" and type(startLine) == "table" then 
+        endChar   = startLine.char 
+        endLine   = startLine.line 
+        startLine = startChar.line 
+        startChar = startChar.char 
+    end
+
+    if startLine == endLine then 
+        if startChar > endChar then 
+            startChar, endChar = swap(startChar, endChar)
+        end
+
+        local entry = self.data.context[startLine]
+
+        if not entry then return "" end 
+
+        return string.sub(entry.text, startChar + 1, endChar)
+    elseif startLine > endLine then  
+        startLine, endLine = swap(startLine, endLine)
+        startChar, endChar = swap(startChar, endChar)
+    end
+
+    local result = ""
+
+    local function recursiveAdd(collection)
+        local r = ""
+        for k, v in pairs(collection) do 
+            r = r .. v.text .. "\n"
+            if v.folding and #v.folding.folds > 0 then 
+                r = r .. recursiveAdd(v.folding.folds)
+            end
+        end
+        return r 
+    end 
+
+    for i = startLine, endLine, 1 do 
+        local entry = self.data.context[i]
+
+        if not entry then break end 
+
+        local text = entry.text 
+
+        if i == startLine then 
+            result = result .. string.sub(text, startChar + 1, #text)
+        elseif i == endLine then 
+            result = result .. string.sub(text, 1, endChar) 
+        else 
+            result = result .. text
+        end
+
+        result = result .. "\n"
+
+        if entry.folding and #entry.folding.folds > 0 then 
+            result = result .. recursiveAdd(entry.folding.folds)
+        end
+    end
+
+    return result 
 end
 
 function self:WordAtPoint(char, line)
