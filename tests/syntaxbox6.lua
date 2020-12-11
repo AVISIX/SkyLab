@@ -228,17 +228,15 @@ function DataContext:ResetProfile()
 end
 
 -- This Function does the whole Lexing Process (Only 1 line at a time)
-function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
+function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
     if not self.profile then return {} end 
-    if not lineNumber then return {} end
-
-    local text = type(extendExistingTokens) ~= "string" and self.defaultLines[lineNumber] or extendExistingTokens
-
     if not text then return {} end  
 
-    if extendExistingTokens == nil or type(extendExistingTokens) ~= "boolean" then extendExistingTokens = false end 
+    if extendExistingTokens == nil then extendExistingTokens = false end 
 
-    self.profile.onLineParseStarted(lineNumber, text)
+    self.latestParsedLine = self.latestParsedLine or 1 
+
+    self.profile.onLineParseStarted(self.latestParsedLine, text)
 
     prevTokens = prevTokens or {}
 
@@ -266,7 +264,6 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
 
         table.insert(result, {
             text = t,
-            line = lineNumber, 
             type = type or default,
             start = tokenStart,
             ending = tokenStart + #t - 1,
@@ -277,7 +274,7 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
 
         lt.index = #result 
 
-        self.profile.onTokenSaved(lt, lineNumber, lt.type, buffer, result)
+        self.profile.onTokenSaved(lt, self.latestParsedLine, lt.type, buffer, result)
 
         return lt
     end
@@ -356,7 +353,7 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
                     
                     if not match then continue end
 
-                    local val = v.validation(text, buffer, match, #result, result, lineNumber) or false 
+                    local val = v.validation(text, buffer, match, #result, result, self.latestParsedLine) or false 
 
                     if type(val) == "string" then 
                         k   = val
@@ -369,7 +366,7 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
 
                         buffer = buffer + #match 
 
-                        self.profile.onMatched(match, lineNumber, k, buffer, result)
+                        self.profile.onMatched(match, self.latestParsedLine, k, buffer, result)
 
                         return true 
                     end 
@@ -383,7 +380,7 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
 
                     if not match then continue end 
 
-                    local val = v.begin.validation(text, buffer, match, #result, result, lineNumber)
+                    local val = v.begin.validation(text, buffer, match, #result, result, self.latestParsedLine)
 
                     if type(val) == "string" then 
                         k   = val
@@ -399,7 +396,7 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
                         capturization.type  = k 
                         capturization.group = v 
 
-                        self.profile.onCaptureStart(match, lineNumber, k, buffer, result)
+                        self.profile.onCaptureStart(match, self.latestParsedLine, k, buffer, result)
 
                         return true 
                     end
@@ -411,7 +408,7 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
             local match = readPattern(g.close.pattern)
 
             if match then 
-                local val = g.close.validation(text, buffer, match, #result, result, lineNumber)
+                local val = g.close.validation(text, buffer, match, #result, result, self.latestParsedLine)
 
                 if val == true then 
                     buffer = buffer + #match 
@@ -423,7 +420,7 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
 
                     capturization.type = "" 
                     
-                    self.profile.onCaptureEnd(match, lineNumber, t, buffer, result)
+                    self.profile.onCaptureEnd(match, self.latestParsedLine, t, buffer, result)
                     
                     continue 
                 end 
@@ -446,7 +443,7 @@ function DataContext:ParseRow(lineNumber, prevTokens, extendExistingTokens)
         addToken("", "endofline")
     end 
 
-    self.profile.onLineParsed(result, text)
+    self.profile.onLineParsed(result, self.latestParsedLine, text)
 
     return result
 end
@@ -689,7 +686,7 @@ function DataContext:FoldLine(i)
 
     for n = i + 1, i + t.folding.available, 1 do 
         local v = self.context[n]
-        if v.button then v.button:SetVisible(false) end 
+        if IsValid(v.button) then v.button:SetVisible(false) end 
         table.insert(t.folding.folds, v)
     end
 
@@ -700,6 +697,8 @@ function DataContext:FoldLine(i)
     self:FixIndeces()
 
     self:LineFolded(i, t.folding.available)
+
+    return t.folding.available
 end
 
 function DataContext:FixIndeces() -- Extremely important function to keep the line indeces in line 
@@ -770,12 +769,12 @@ function DataContext:TrimRight(i)
     end 
 end
 
-function DataContext:ConstructContextLine(i) -- Rework this piece of shit 
+function DataContext:ConstructContextLine(i, text) -- Rework this piece of shit 
     if not i then return {} end 
 
     self:LineConstructionStarted(i)
 
-    self.defaultLines[i] = string.gsub(self.defaultLines[i], "\r", "    ") -- Fuck this shit i legit cannot be asked...
+    text = string.gsub(text, "\r", "    ") -- Fuck this shit i legit cannot be asked...
 
     local prev = self.context[i - 1]
 
@@ -787,23 +786,18 @@ function DataContext:ConstructContextLine(i) -- Rework this piece of shit
 
     local temp = {}
 
-    do 
-        local index = i 
-
-        if lastContextLine.index then 
-            index = (lastContextLine.index or 1) + (self:GetFoldCount(i - 1) or 0) + 1
-        end
-
-        temp.index = index 
-    end 
-    temp.text   = self.defaultLines[i] 
-    temp.tokens = self:ParseRow(i, (lastContextLine.tokens or {}))
+    temp.index = i 
+    self.latestParsedLine = i
+    temp.text   = text
+    temp.tokens = self:ParseRow(text, (lastContextLine.tokens or {}))
 
     local level = lastContextLine.level 
 
     if level == nil then level = 0 end 
 
     local countedLevel, offset = self:CountIndentation(temp.tokens)
+
+    countedLevel = countedLevel or 0 
 
     temp.offset = offset 
     temp.nextLineIndentationOffsetModifier = countedLevel + (lastContextLine.nextLineIndentationOffsetModifier or 0)
@@ -819,23 +813,83 @@ function DataContext:SetContext(text)
 
     rules = rules or ""
 
+    local lines = {}
+
     if type(text) == "table" then 
-        self.defaultLines = text 
+        lines = text 
     elseif type(text) == "string" then     
-        self.defaultLines = string.Split(text, "\n")
+        lines = string.Split(text, "\n")
     else return end 
 
     self.context = {}
 
-    for i, line in ipairs(self.defaultLines) do 
-        if not line then break end 
-        table.insert(self.context, self:ConstructContextLine(i))
+    for i, line in ipairs(lines) do 
+        table.insert(self.context, self:ConstructContextLine(i, line))
         self:TrimRight(i)
     end
 
     self:GetGlobalFoldingAvailability()
 
     return self.context 
+end
+
+function DataContext:GetText()
+    local function recursiveAdd(collection)
+        for i = 1, #collection, 1 do 
+            local item = collection[i]
+            
+            if not item then break end 
+
+            temp = temp .. item.text .. "\n"
+        
+            if item.folding and #item.folding.folds > 0 then
+                temp = temp .. recursiveAdd(item.folding.folds)
+            end
+        end
+        
+        return temp 
+    end
+
+    return recursiveAdd(self.context, true) 
+end
+
+function DataContext:UnfoldAll()
+    local i = 1 
+
+    while true do 
+        local item = self.context[i]
+
+        if not item then break end 
+
+        if IsValid(item.button) == true then 
+            item.button:SetFolded(false)
+        end
+
+        self:UnfoldLine(i)
+
+        i = i + 1
+    end
+end
+
+function DataContext:FoldAll()
+    local i = #self.context 
+
+    while true do 
+        local item = self.context[i]
+
+        if not item then break end 
+
+        if IsValid(item.button) == true then 
+            item.button:SetFolded(true)
+        end
+
+        if (self:FoldLine(i) or 0) ~= 0 then 
+            i = #self.context
+            continue 
+        end
+
+        i = i - 1
+    end
 end
 
 function DataContext:GetFoldCount(i)
@@ -872,7 +926,6 @@ function DataContext:ValidateFoldingAvailability(i, trigger)
 
         if #self.context[i].folding.folds > 0 then 
             if endline and endline ~= i and (endline - i + 1) > 0 then 
-                print(endline)
                 wipe() -- when folded the available folds should be 0, if they arent 0 then something has changed that could affect the folding.
             end 
             return false 
@@ -927,11 +980,10 @@ function DataContext:FixFolding(i)
 end
 
 function DataContext:InsertLine(i, text)
-    i = i or #self.defaultLines
+    i = i or #self.context 
     i = math.max(i, 1)
 
-    table.insert(self.defaultLines, i, text)
-    table.insert(self.context, math.min(i, #self.defaultLines), self:ConstructContextLine(i))
+    table.insert(self.context, math.min(i, #self.context + 1), self:ConstructContextLine(i, text))
 
     self:FixIndeces()
 
@@ -939,10 +991,9 @@ function DataContext:InsertLine(i, text)
 end
 
 function DataContext:RemoveLine(i)
-    i = i or #self.defaultLines
-    i = math.Clamp(i, 1, #self.defaultLines)
+    i = i or #self.context
+    i = math.Clamp(i, 1, #self.context)
 
-    table.remove(self.defaultLines, i)
     table.remove(self.context, i)
 
     self:FixIndeces()
@@ -953,11 +1004,10 @@ function DataContext:RemoveLine(i)
 end
 
 function DataContext:OverrideLine(i, text)
-    if i <= 0 or i > #self.defaultLines then return end 
+    if i <= 0 or i > #self.context then return end 
     if not text then return end 
 
-    self.defaultLines[i] = text 
-    self.context[i] = self:ConstructContextLine(i)
+    self.context[i] = self:ConstructContextLine(i, text)
 
     self:FixIndeces()
 
@@ -999,14 +1049,16 @@ function DataContext:SimpleAreaParse(s, e)
 
             if not entry then break end 
         
-            local newTokens = self:ParseRow(index, (last or {}).tokens or {}, entry.text or "")
+            self.latestParsedLine = i 
+            local newTokens = self:ParseRow(entry.text, (last or {}).tokens or {})
 
             if inFolds == true and i == start and tokensSame(newTokens, entry.tokens) == true then -- We do this to determine wether a full parse is requiered, if the first folded line changes, then all the others are certainly gonna change too.
                 last = collection[#collection] -- save the last token to continue the part that was skipped 
                 index = index + #collection
+                entry.tokens = newTokens 
                 break
             end
-
+            
             entry.tokens = newTokens 
             
             index = index + 1
@@ -1418,7 +1470,7 @@ do
             }
         },
 
-        onLineParseStarted = function(i)
+        onLineParseStarted = function(i, text)
             E2Cache[i] = {}
         end,
 
@@ -1428,6 +1480,7 @@ do
 
         onMatched = function(result, i, type, buffer, prevTokens) 
             if type == "userfunctions" then 
+                E2Cache = E2Cache or {}
                 if not E2Cache[i] then E2Cache[i] = {} end 
                 E2Cache[i][result] = 1
             end
@@ -1496,6 +1549,11 @@ local function tableSame(a, b)
     return true 
 end
 
+local function swap(a, b)
+    local save = (type(a) == "table" and table.Copy(a) or a)
+    return b, save 
+end
+
 AccessorFunc(self, "tabSize", "TabSize", FORCE_NUMBER)
 AccessorFunc(self, "colors", "Colors")
 
@@ -1503,13 +1561,13 @@ function self:Init()
     local super = self 
 
     self.colors = {}
-    self.colors.background = dark(45)
+    self.colors.background = dark(40)
     self.colors.lineNumbersBackground = dark(55)
     self.colors.linesEditorDivider = Color(240,130,0, 100)
     self.colors.lineNumbers = Color(240,130,0)
 
-    self.colors.highlights = Color(0,60,220,40)
-    self.colors.selection = Color(185, 230, 45, 40)
+    self.colors.highlights = Color(0,60,220,60)
+    self.colors.selection = Color(185, 230, 45, 50)
 
     self.colors.caret = Color(25,175,25)
     self.colors.endOfText = dark(150,5)
@@ -1535,6 +1593,10 @@ function self:Init()
         actualLine = 1
     }
     self.lastCaret = table.Copy(self.caret)
+    self.lastCaretClick = table.Copy(self.caret)
+
+    self.caretBlink = RealTime()
+
     self.lastCaret.char = -1 
 
     self.caretRegion = {-1,-2,-3}
@@ -1765,7 +1827,8 @@ function self:InitBackgroundWorker() -- Initializes the background thread, this 
 
             if item then 
                 item.index = self.bgLineCounter 
-                item.tokens = self.data:ParseRow(self.bgLineCounter, self.bgLast.tokens or {}, item.text or "") 
+                self.data.latestParsedLine = self.bgLineCounter
+                item.tokens = self.data:ParseRow(item.text, self.bgLast.tokens or {}) 
 
                 local countedLevel, offset = self.data:CountIndentation(item.tokens or {})
                 
@@ -1884,8 +1947,7 @@ function self:SetSelection(...)
             char = startChar, 
             line = startLine
         },
-        ending = 
-        {
+        ending = {
             char = endingChar,
             line = endingLine 
         }
@@ -1907,7 +1969,7 @@ function self:IsSelecting()
 end
 
 function self:ResetSelection()
-    self:SetSelection(self.caret)
+    self:SetSelection(self.caret.char, self.caret.actualLine)
 end
 
 function self:HideButtons()
@@ -1958,6 +2020,8 @@ function self:TextChanged()
     self:ParseVisibleLines()
     self:GetTabLevels()
     self:HideButtons()
+    self:ClearHighlights()
+    self.pressedWord = nil 
    -- self:ResetBGProg()
 end 
 
@@ -2016,15 +2080,27 @@ function self:_KeyCodePressed(code)
                 self:SetSelectionEnd(self.caret.char, self.caret.actualLine)
             end
         else 
+            self:ClearHighlights()
+            self.pressedWord = nil 
             self:ResetSelection()
         end 
     end
 
-    if self:IsCtrl() and code == KEY_C then 
-        if self:IsSelecting() == true then 
-            SetClipboardText(self:GetTextArea(self.selection.start, self.selection.ending))
-        end 
-        return 
+    if self:IsCtrl() then
+        if code == KEY_C then 
+            if self:IsSelecting() == true then
+                local copy = self:GetTextArea(self.selection.start, self.selection.ending)
+                if copy then  
+                    SetClipboardText(copy)
+                end 
+            end 
+        elseif code == KEY_K then 
+            self.data:FoldAll()
+        elseif code == KEY_J then 
+            self.data:UnfoldAll()
+        end
+
+        return
     end
 
     if code == KEY_DOWN then
@@ -2366,6 +2442,8 @@ function self:SetCaret(...)
         line = self.data.context[actualLine].index
     end
 
+    self.lastCaret = table.Copy(self.caret)
+
     self.caret.line = math.max(line, 1)
     self.caret.actualLine = actualLine -- We save this to avoid shitty loops all over the place 
 
@@ -2382,6 +2460,8 @@ function self:SetCaret(...)
         end
     end
 
+    self:ToggleCaret()
+
     self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
 
     self.data:ValidateFoldingAvailability(self.caret.actualLine) 
@@ -2392,7 +2472,7 @@ function self:SetCaret(...)
 end
 
 function self:GetTextArea(startChar, startLine, endChar, endLine)
-    if not startChar then return end 
+    if not startChar and not startLine then return end 
 
     if type(startChar) == "table" and type(startLine) == "table" then 
         endChar   = startLine.char 
@@ -2437,14 +2517,12 @@ function self:GetTextArea(startChar, startLine, endChar, endLine)
         local text = entry.text 
 
         if i == startLine then 
-            result = result .. string.sub(text, startChar + 1, #text)
+            result = result .. string.sub(text, startChar + 1, #text) .. "\n"
         elseif i == endLine then 
             result = result .. string.sub(text, 1, endChar) 
         else 
-            result = result .. text
+            result = result .. text .. "\n"
         end
-
-        result = result .. "\n"
 
         if entry.folding and #entry.folding.folds > 0 then 
             result = result .. recursiveAdd(entry.folding.folds)
@@ -2502,10 +2580,13 @@ function self:WordAtPoint(char, line)
 end
 
 -- Non recursive function to find words 
-function self:FindWords(needle, usePatterns, rangeStart, rangeEnd)
+function self:FindWords(needle, usePatterns, rangeStart, rangeEnd, checkCallback, filterEmpty)
     if not needle then return {} end 
 
+    checkCallback = checkCallback or function() return true end 
+
     if usePatterns == nil then usePatterns = true end 
+    if filterEmpty == nil then filterEmpty = true end 
 
     rangeStart = rangeStart or self.textPos.line 
     rangeEnd   = rangeEnd   or (self.textPos.line + self:VisibleLines())
@@ -2519,11 +2600,17 @@ function self:FindWords(needle, usePatterns, rangeStart, rangeEnd)
 
         local i = 1
 
-        while i < #item.text do 
+        while i <= #item.text do 
             local a, b = string.find(item.text, needle, i, !usePatterns) 
             
-            if a and b and a == i then 
-                table.insert(result, {
+            if a and b and a == i then
+
+                if filterEmpty == true and string.gsub(string.sub(item.text, i, b), "%s", "") == "" then 
+                    i = i + 1
+                    continue 
+                end 
+
+                local temp = {
                     start = {
                         char = (i - 1),
                         line = line  
@@ -2532,11 +2619,13 @@ function self:FindWords(needle, usePatterns, rangeStart, rangeEnd)
                         char = b,
                         line = line 
                     }
-                })
+                }
 
-                i = i + #needle 
-
-                continue 
+                if checkCallback(temp) == true then 
+                    table.insert(result, temp)
+                    i = i + #needle
+                    continue 
+                end 
             end 
 
             i = i + 1
@@ -2548,7 +2637,9 @@ end
 
 function self:HighlightPressedWord()
     if not self.pressedWord then return end 
-    table.Merge(self.highlights, self:FindWords(self.pressedWord, false))
+    table.Merge(self.highlights, self:FindWords(self.pressedWord, false), nil, nil, function(temp)
+        return tableSame(self.selection, temp) == false
+    end)
 end 
 
 function self:OnMouseClick(code) end 
@@ -2562,7 +2653,7 @@ function self:OnMousePressed(code)
 
         ::redo:: 
 
-        if line and tableSame(self.caret, self.lastCaret) == true then 
+        if line and tableSame(self.caret, self.lastCaretClick) == true then 
             self:ClearHighlights()
 
             if self.mouseCounter == 1 then 
@@ -2597,7 +2688,7 @@ function self:OnMousePressed(code)
 
     end
 
-    self.lastCaret = table.Copy(self.caret)
+    self.lastCaretClick = table.Copy(self.caret)
 
     if self.entry:HasFocus() == false then self.entry:RequestFocus() end 
 end
@@ -2627,13 +2718,6 @@ function self:PaintAfter(w, h) end
 local function drawLine(startX, startY, endX, endY, color)
     surface.SetDrawColor(color)
     surface.DrawLine(startX, startY, endX, endY)
-end
-
-local function swap(a, b)
-    local save = (type(a) == "table" and table.Copy(a) or a)
-    a = b 
-    b = save
-    return a, b 
 end
 
 function self:Goto(char, line)
@@ -2788,15 +2872,29 @@ function self:PaintTokensAt(tokens, x, y, maxChars)
     return errors 
 end
 
+function self:ToggleCaret()
+    self.caretBlink = RealTime() + 0.33
+    self.caretToggle = true 
+end
+
 function self:PaintCaret(x, w, i, c, index)
+    if self.caretToggle == nil then self.caretToggle = false end
+
+    if RealTime() > self.caretBlink then 
+        self.caretToggle = !self.caretToggle
+        self.caretBlink = RealTime() + 0.33
+    end 
+
     if index == self.caret.line then
         draw.RoundedBox(0, 0, c * self.font.h, w, 1, self.colors.currentLineOutlines)
         draw.RoundedBox(0, 0, c * self.font.h, w, self.font.h, self.colors.currentLine)
         draw.RoundedBox(0, 0, (c + 1) * self.font.h, w, 1, self.colors.currentLineOutlines)
 
-        if self.caret.char + self.textPos.char >= self.textPos.char then 
-            draw.RoundedBox(0, x + self.font.w * (self.caret.char - self.textPos.char + 1), c * self.font.h, 2, self.font.h, self.colors.caret)
-        end 
+        if self.caretToggle == true then 
+            if self.caret.char + self.textPos.char >= self.textPos.char then 
+                draw.RoundedBox(0, x + self.font.w * (self.caret.char - self.textPos.char + 1), c * self.font.h, 2, self.font.h, self.colors.caret)
+            end
+        end  
     else 
         self.data:TrimRight(i)
     end
@@ -2973,6 +3071,21 @@ function self:OnMouseWheeled(delta)
     end
 end
 
+function self:HighlightSelectedWords()
+    if tableSame(self.selection, self.lastSelection or {}) == false then 
+        self:ClearHighlights()
+
+        local selectedText = self:GetTextArea(self.selection.start, self.selection.ending)
+
+        if selectedText then 
+            self.pressedWord = selectedText
+            self:HighlightPressedWord()
+        end
+
+        self.lastSelection = table.Copy(self.selection) 
+    end
+end
+
 function self:Think()
     self.textPos:Set()
 
@@ -2985,9 +3098,19 @@ function self:Think()
         self:TimeRefresh(10)
     end
 
-    if input.IsMouseDown(MOUSE_LEFT) == true and vgui.GetHoveredPanel() == self and self.scroller.Dragging == false and self.mouseCounter == 1 then 
-        self:SetCaret(self:pit(self:LocalCursorPos()))
-        self:SetSelection(self.selection.start.char, self.selection.start.line, self.caret.char, self.caret.actualLine)
+    if input.IsMouseDown(MOUSE_LEFT) == true then 
+        if vgui.GetHoveredPanel() == self and self.scroller.Dragging == false and self.mouseCounter == 1 then 
+            self:SetCaret(self:pit(self:LocalCursorPos()))
+            self:SetSelection(self.selection.start.char, self.selection.start.line, self.caret.char, self.caret.actualLine)
+            
+            if self.selection.start.line == self.selection.ending.line and self.selection.start.char ~= self.selection.ending.char then 
+                self:HighlightSelectedWords()
+            elseif (self.selection.start.line == self.selection.ending.line and self.selection.start.char == self.selection.ending.char and tableSame(self.caret, self.lastCaret) == false) or self.selection.start.line ~= self.selection.ending.line then 
+                self:ClearHighlights()
+            end
+        end
+    elseif self:IsShift() == true then 
+        self:HighlightSelectedWords()
     end
 
     self:ContinueBackgroundWorker()
