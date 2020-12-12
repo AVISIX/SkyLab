@@ -67,13 +67,43 @@ SSLE.RegisterProfile("Expression 2", function()
         },
         reserved = 
         {
-            operators = {"+","-","/","|","<",">","=","*","?","$","!",":","&","%","~",",", "^"},
-            others    = {".", ";"}
+            operators = {
+                ["+"]=1,
+                ["-"]=1,
+                ["/"]=1,
+                ["|"]=1,
+                ["<"]=1,
+                [">"]=1,
+                ["="]=1,
+                ["*"]=1,
+                ["?"]=1,
+                ["$"]=1,
+                ["!"]=1,
+                [":"]=1,
+                ["&"]=1,
+                ["%"]=1,
+                ["~"]=1,
+                ",",
+                ["^"]=1
+            },
+            others =
+            {
+                ["."]=1, 
+                [";"]=1
+            }
         },
         indentation = 
         {
-            open = {"{", "%(", "%["},
-            close = {"}", "%)", "%]"},
+            open = {
+                "{", 
+                "("
+            },
+
+            close = {
+                "}",
+                ")"
+            },
+
             offsets = {
                 ["#ifdef"] = false, 
                 ["#else"] = false,    
@@ -114,14 +144,25 @@ SSLE.RegisterProfile("Expression 2", function()
         },
         unreserved = 
         {
-            ["_"] = 0,
-            ["@"] = 0
+            ["_"] = 1,
+            ["@"] = 1
         },
         closingPairs = 
         {
-            scopes            = {"{", "}"},
-            parenthesis       = {"(", ")"},
-            propertyAccessors = {"[", "]"}
+            scopes = {
+                open = "{",
+                close = "}"
+            },
+            parenthesis = 
+            {
+                open = "(",
+                close = ")"
+            },
+            propertyAccessors = 
+            {
+                open = "[",
+                close = "]"
+            }
         },
         matches = 
         {
@@ -208,18 +249,26 @@ SSLE.RegisterProfile("Expression 2", function()
 
                     for i, lineCache in pairs(E2Cache) do -- Need cache for every line so if something cached gets removed it can be updated
                         if i > lineIndex then continue end 
-                        if lineCache.userfunctions and lineCache.userfunctions[result] then 
-                            tot("userfunctions")
-                            return true 
+                        if lineCache[result] then 
+                            return "userfunctions" 
                         end
                     end 
 
                     local extraCheck = true 
+
                     if E2Lib then 
                         if not wire_expression2_funclist[result] then 
                             extraCheck = false 
                         end
-                    end
+                    else 
+                        local prevToken = tokens[tokenIndex - 1]
+
+                        if prevToken and prevToken.text and prevToken.type then 
+                            if prevToken.type == "types" or prevToken.text == "function" then 
+                                return "userfunctions"
+                            end
+                        end  
+                    end 
 
                     local function nextChar(char)
                         return line[buffer + #result] == char  
@@ -249,8 +298,7 @@ SSLE.RegisterProfile("Expression 2", function()
                         extraCheck = istype(result)
                         if extraCheck == false then 
                             if wire_expression2_funclist[result] and isSpecial(line[buffer - 1]) == true then 
-                                tOther("builtinFunctions")
-                                return true 
+                                return "builtinFunctions" 
                             end
                         end
                     end
@@ -350,7 +398,7 @@ SSLE.RegisterProfile("Expression 2", function()
             }
         },
 
-        onLineParseStarted = function(i)
+        onLineParseStarted = function(i, text)
             E2Cache[i] = {}
         end,
 
@@ -360,10 +408,9 @@ SSLE.RegisterProfile("Expression 2", function()
 
         onMatched = function(result, i, type, buffer, prevTokens) 
             if type == "userfunctions" then 
+                E2Cache = E2Cache or {}
                 if not E2Cache[i] then E2Cache[i] = {} end 
-                if not E2Cache[i][type] then E2Cache[i][type] = {} end 
-                if not E2Cache[i][type][result] then E2Cache[i][type][result] = 0 end 
-                E2Cache[i][type][result] = E2Cache[i][type][result] + 1
+                E2Cache[i][result] = 1
             end
         end,
 

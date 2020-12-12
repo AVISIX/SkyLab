@@ -257,17 +257,23 @@ function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
     local default = (self.profile.language ~= "Plain" and "error" or "default")
 
     -- Save a token to the current token context
-    local function addToken(t, type, inCapture)
+    local function addToken(t, typ, inCapture, color)
         if not t then return end 
+
+        if inCapture ~= nil and type(inCapture) == "string" then 
+            color = inCapture  
+            inCapture = nil 
+        end
 
         local tokenStart = ((result[#result] or {}).ending or 0) + 1  
 
         table.insert(result, {
             text = t,
-            type = type or default,
+            type = typ or default,
             start = tokenStart,
             ending = tokenStart + #t - 1,
-            inCapture = inCapture
+            inCapture = inCapture,
+            color = color
         })
 
         local lt = result[#result] 
@@ -362,7 +368,7 @@ function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
 
                     if val == true then
                         addRest()
-                        addToken(match, k)
+                        addToken(match, k, (self.profile.matches[k] or {}).color or nil)
 
                         buffer = buffer + #match 
 
@@ -414,7 +420,7 @@ function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
                     buffer = buffer + #match 
                     builder = builder .. match 
 
-                    addToken(builder, t)
+                    addToken(builder, t, (self.profile.captures[t] or {}).color or nil)
 
                     builder = ""
 
@@ -434,7 +440,7 @@ function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
     until buffer > #text 
 
     if capturization.type ~= "" then 
-        addToken(builder, capturization.type, capturization.group.multiline)
+        addToken(builder, capturization.type, capturization.group.multiline, (self.profile.captures[capturization.type] or {}).color or nil)
     else 
         addRest()  
     end
@@ -595,12 +601,12 @@ function DataContext:SmartFolding(startLine) -- Uses Whitespace differences to d
         local currentLeft = getLeftLen(self.context[startLine].text) 
 
         if currentLeft < nextLeft then 
-            local nextReal = peekNextFilledLine(startLine)
+            local nextReal = peekNextFilledLine(startLine - 1)
 
             if not nextReal or (nextReal.text ~= "" and getLeftLen(nextReal.text) < nextLeft) then 
                 return startLine - 2
             end  
-        end 
+        end
 
         startLine = startLine + 1
     end
@@ -696,7 +702,7 @@ function DataContext:FoldLine(i)
 
     self:FixIndeces()
 
-    self:LineFolded(i, t.folding.available)
+    self:LineFolded(i, t.folding.available, t)
 
     return t.folding.available
 end
@@ -739,7 +745,7 @@ function DataContext:UnfoldLine(i)
 
     self:ValidateFoldingAvailability(i)
 
-    self:LineUnfolded(i, len)
+    self:LineUnfolded(i, len, t)
 
     return fc
 end
@@ -878,6 +884,8 @@ function DataContext:FoldAll()
         local item = self.context[i]
 
         if not item then break end 
+
+        self:ValidateFoldingAvailability(i)
 
         if IsValid(item.button) == true then 
             item.button:SetFolded(true)
@@ -1105,337 +1113,525 @@ end
 
 do 
     local keywords = {
-        ["if"]       = 1,
-        ["else"]     = 1,
-        ["elseif"]   = 1,
-        ["while"]    = 1,
-        ["for"]      = 1,
-        ["foreach"]  = 1,
-        ["switch"]   = 1,
-        ["case"]     = 1,
-        ["break"]    = 1,
-        ["default"]  = 1,
-        ["continue"] = 1,
-        ["return"]   = 1,
-        ["local"]    = 1,
-        ["function"] = 1
+        ["break"]       = 1,
+        ["do"]     = 1,
+        ["else"]   = 1,
+        ["elseif"]    = 1,
+        ["end"]      = 1,
+        ["for"] = 1,
+        ["function"]   = 1,
+        ["if"]    = 1,
+        ["in"] = 1,
+        ["local"] = 1,
+        ["repeat"] = 1,
+        ["return"] = 1,
+        ["then"] = 1,
+        ["until"] = 1,
+        ["while"] = 1,
+    }    
+    
+    local lg = {
+        ["_G"] = 1,
+        ["_VERSION"] = 1
+    }
+    
+    local metamethods = {
+        ["__add"] = 1,
+        ["__sub"] = 1,
+        ["__mod"] = 1,
+        ["__unm"] = 1,
+        ["__concat"] = 1,
+        ["__lt"] = 1,
+        ["__index"] = 1,
+        ["__call"] = 1,
+        ["__gc"] = 1,
+        ["__mul"] = 1,
+        ["__div"] = 1,
+        ["__pow"] = 1,
+        ["__len"] = 1,
+        ["__eq"] = 1,
+        ["__le"] = 1,
+        ["__newindex"] = 1,
+        ["__tostring"] = 1,
+        ["__mode"] = 1,
+        ["__tonumber"] = 1
+    }
+    
+    local builtinlibs = {
+        ["string"] = 1,
+        ["table"] = 1,
+        ["coroutine"] = 1,
+        ["os"] = 1,
+        ["io"] = 1,
+        ["math"] = 1,
+        ["debug"] = 1
+    }
+    
+    local stdfuncs = {
+
+        ["coroutine"] = {
+          ["yield"] = 1,
+          ["resume"] = 1,
+          ["running"] = 1,
+          ["status"] = 1,
+          ["wait"] = 1,
+          ["wrap"] = 1,
+          ["create"] = 1
+        },
+        ["math"] = {
+            ["sqrt"] = 1,
+            ["min"] = 1,
+            ["abs"] = 1,
+            ["acos"] = 1,
+            ["asin"] = 1,
+            ["atan"] = 1,
+            ["atan2"] = 1,
+            ["ceil"] = 1,
+            ["cos"] = 1,
+            ["cosh"] = 1,
+            ["deg"] = 1,
+            ["exp"] = 1,
+            ["floor"] = 1,
+            ["frmod"] = 1,
+            ["frexp"] = 1,
+            ["IntToBin"] = 1,
+            ["Idexp"] = 1,
+            ["log"] = 1,
+            ["log10"] = 1,
+            ["max"] = 1,
+            ["min"] = 1,
+            ["mod"] = 1,
+            ["modf"] = 1,
+            ["pow"] = 1,
+            ["rad"] = 1,
+            [ "Rand"] = 1,
+          ["random"] = 1,
+          ["randomseed"] = 1,
+          ["sin"] = 1,
+          ["sinh"] = 1,
+          ["sqrt"] = 1,
+          ["tan"] = 1,
+          ["huge"] = 1,
+          ["pi"] = 1,
+        },
+        ["string"] = {
+          ["byte"] = 1,
+          ["char"] = 1,
+          ["dump"] = 1,
+          ["find"] = 1,
+          ["gfind"] = 1,
+          ["format"] = 1,
+          ["gsub"] = 1,
+          ["sub"] = 1,
+          ["len"] = 1,
+          ["lower"] = 1,
+          ["match"] = 1,
+          ["gmatch"] = 1,
+          ["rep"] = 1,
+          ["reverse"] = 1,
+          ["upper"] = 1,
+        },
+        ["debug"] = {
+            ["debug"] = 1,
+            ["getfenv"] = 1,
+            ["gethook"] = 1,
+            ["getinfo"] = 1,
+            ["getlocal"] = 1,
+            ["getmetatable"] = 1,
+            ["getregistry"] = 1,
+            ["getupvalue"] = 1,
+            ["setfenv"] = 1,
+            ["sethook"] = 1,
+            ["setlocal"] = 1,
+            ["setmetatable"] = 1,
+            ["setupvalue"] = 1,
+            ["traceback"] = 1,
+            ["upvalueid"] = 1,
+            ["upvaluejoin"] = 1,
+        },
+        ["os"] = {
+            ["clock"] = 1,
+            ["date"] = 1,
+            ["difftime"] = 1,
+            ["exit"] = 1,
+            ["setlocale"] = 1,
+            ["time"] = 1,
+        },
+        ["table"] = {
+            ["concat"] = 1,
+            ["insert"] = 1,
+            ["move"] = 1,
+            ["pack"] = 1,
+            ["remove"] = 1,
+            ["sort"] = 1,
+            ["unpack"] = 1,
+        },
+        ["utf8"] = {
+            ["char"] = 1,
+            ["charpattern"] = 1,
+            ["codepoint"] = 1,
+            ["codes"] = 1,
+            ["len"] = 1,
+            ["offset"] = 1,
+        },
+    }
+    
+    local builtinfuncs = {
+        ["getfenv"] = 1,
+        ["getmetatable"] = 1,
+        ["ipairs"] = 1,
+        ["load"] = 1,
+        ["loadfile"] = 1,
+        ["loadstring"] = 1,
+        ["next"] = 1,
+        ["pairs"] = 1,
+        ["print"] = 1,
+        ["rawequal"] = 1,
+        ["rawget"] = 1,
+        ["rawset"] = 1,
+        ["select"] = 1,
+        ["setfenv"] = 1,
+        ["setmetatable"] = 1,
+        ["tonumber"] = 1,
+        ["tostring"] = 1,
+        ["type"] = 1,
+        ["unpack"] = 1
     }
     
     local E2Cache = {}
     
     prof = {
-        language = "Expression 2",
-        filetype = "txt",
-        commonDirectories = 
-        {
-            {
-                root = "DATA",
-                directory = "e2files"
-            },
-            {
-                root = "DATA",
-                directory = "expression2"
-            }
+        language = "Lua",
+        filetype = "lua",
+        reserved = {
+            operators = {"+","-","*","/","%","^","=","~","<",">"},
+            dot = {"."},
+            hash = {"#"},
+            props = {":"},
+            others = {","}
         },
-        reserved = 
+        unreserved = 
         {
-            operators = {
-                ["+"]=1,
-                ["-"]=1,
-                ["/"]=1,
-                ["|"]=1,
-                ["<"]=1,
-                [">"]=1,
-                ["="]=1,
-                ["*"]=1,
-                ["?"]=1,
-                ["$"]=1,
-                ["!"]=1,
-                [":"]=1,
-                ["&"]=1,
-                ["%"]=1,
-                ["~"]=1,
-                ",",
-                ["^"]=1
-            },
-            others =
-            {
-                ["."]=1, 
-                [";"]=1
-            }
+            ["_"] = 0
         },
-        indentation = 
-        {
+        indentation = {
             open = {
-                "{", 
-                "("
+                "function",
+                "if",
+                "do",
+                "repeat",
+                "elseif",
+                "else",
+                "{"
             },
-
             close = {
-                "}",
-                ")"
+                "end",
+                "until",
+                "elseif",
+                "else",
+                "}"
             },
-
-            offsets = {
-                ["#ifdef"] = false, 
-                ["#else"] = false,    
-                ["#endif"] = false 
+            openValidation = function(result, charIndex, lineIndex, line) 
+                local prevChar = line[charIndex - 1] or ""
+                local nextChar = line[charIndex + #result] or ""
+                if isSpecial(prevChar) == true and isSpecial(nextChar) == true then return true end 
+                return false  
+            end, 
+            
+            closeValidation = function(result, charIndex, lineIndex, line) 
+                local prevChar = line[charIndex - 1] or ""
+                local nextChar = line[charIndex + #result] or "" 
+                if isSpecial(prevChar) == true and isSpecial(nextChar) == true then return true end 
+                return false  
+            end,
+ 
+            offsets = { -- -8
+                ["then"] = -1, 
+                --["else"] = -1,
+                ["elseif"] = -1
             }
+        },
+        closingPairs = 
+        {
+            scopes     = {open = "{", close = "}"},
+            parenthesis      = {open = "(", close = ")"},
+            brackets    = {open = "[", close = "]"}
         },
         autoPairing =
         {
             {
                 word = "{",
                 pair = "}",
-                validation = function() return true end     
+                validation = function(line, charIndex, lineIndex) 
+                    return line[charIndex + 1] ~= "}" 
+                end     
             },
             {
                 word = "(",
                 pair = ")",
-                validation = function() return true end 
+                validation = function(line, charIndex, lineIndex) 
+                    return true --line[charIndex + 1] ~= ")"  
+                end 
             },
             {
                 word = "[",
                 pair = "]",
-                validation = function(line, charIndex, lineIndex)  
-                    return (line[charIndex - 1] or "") ~= "#"
+                validation = function(line, charIndex, lineIndex) 
+                    return true --line[charIndex + 1] ~= "]"  
                 end 
             },
             {
                 word = '"',
                 pair = '"',
                 validation = function(line, charIndex, lineIndex)  
-                    return (line[charIndex - 1] or "") ~= '"'
+                    local pchar = (line[charIndex - 1] or "")
+                    local nchar = (line[charIndex + 1] or "")
+                    if pchar == "'" and nchar == "'" then return false end 
+                    return pchar ~= '"' 
                 end 
             },
             {
-                word = "#[", 
-                pair = "]#",
-                validation = function() return true end 
+                word = "'",
+                pair = "'",
+                validation = function(line, charIndex, lineIndex)  
+                    local pchar = (line[charIndex - 1] or "")
+                    local nchar = (line[charIndex + 1] or "")
+                    if pchar == '"' and nchar == '"' then return false end 
+                    return pchar ~= '"' 
+                end 
             },
+            {
+                word = "repeat",
+                pair = " until",
+                validation = function(line, charIndex, lineIndex) 
+                    return isSpecial(line[charIndex - #"repeat"] or "") and string.sub(line, charIndex + 1, charIndex + #"until") ~= "until"
+                end 
+            },
+            {
+                word = "do",
+                pair = " end",
+                validation = function(line, charIndex, lineIndex) 
+                    return isSpecial(line[charIndex - 2] or "") and string.sub(line, charIndex + 1, charIndex + #"end") ~= "end"
+                end 
+            },
+            {
+                word = "if",
+                pair = " then",
+                validation = function(line, charIndex, lineIndex) 
+                    return isSpecial(line[charIndex - 2] or "") and string.sub(line, charIndex + 1, charIndex + #"then") ~= "then"
+                end 
+            },
+            {
+                word = "elseif",
+                pair = " then",
+                validation = function(line, charIndex, lineIndex) 
+                    return isSpecial(line[charIndex - #"elseif"] or "") and string.sub(line, charIndex + 1, charIndex + #"then") ~= "then"
+                end 
+            },
+            {
+                word = "function",
+                pair = " end",
+                validation = function(line, charIndex, lineIndex) 
+                    return isSpecial(line[charIndex - #"function"] or "") and string.sub(line, charIndex + 1, charIndex + #"end") ~= "end"
+                end 
+            },
+        }, 
+
+        colors = {
+            scopes            = Color(200,100,0),
+            brackets          = Color(200,100,0),
+            parenthesis       = Color(200,100,0),
+
+            hash              = Color(186,37,153), -- #
+
+            operators        = Color(255,255, 0), -- Arithmetic characters +-/*%
+            strings           = Color(150,150,150), -- Double string ""
+
+            comments = Color(128,128,128), -- Multiline Comments --[[]]
+
+            keywords          = Color(138, 210, 252), -- Keywords 
+
+            constants         = Color(186,37,153),
+
+            builtinlibs       = Color(110,110,110), -- All standard lua libraries
+            stdfuncs          = Color(110,110,110), -- All standard lua functions that ARE part of a library
+            builtinfuncs      = Color(110,110,110), -- All standard lua functions that arent part of a library
+
+            func              = Color(126, 191, 145), -- function <myFunc>()
+            funcself          = Color(242, 195, 164),  -- self 
+            funcparam         = Color(105,120,160), -- function <a.b.c.d.e>:myFunc()
+
+            numbers          = Color(193, 143, 115), -- Numbers
+
+            customfuncs       = Color(90, 158, 110), -- Functions that arent standard in Lua 
+            customlibs        = Color(190,190,190), -- Libraries that arent standard in Lua
+            variables         = Color(230,230,230), -- Any other word
+            varprops          = Color(132,165,110), -- myTable.<some property>
+
+            metamethods       = Color(180,250,125),
+            garbagecollector  = Color(165, 125, 250),
+
+            error             = Color(241,96,96) -- Anything unhandled
         },
-        unreserved = 
-        {
-            ["_"] = 1,
-            ["@"] = 1
-        },
-        closingPairs = 
-        {
-            scopes = {
-                open = "{",
-                close = "}"
-            },
-            parenthesis = 
-            {
-                open = "(",
-                close = ")"
-            },
-            propertyAccessors = 
-            {
-                open = "[",
-                close = "]"
-            }
-        },
-        matches = 
-        {
-            preprocDirective = 
-            {
-                pattern = "^@[^ ]*",
-                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex, triggerOther)
-                    if result == "@persist" 
-                    or result == "@inputs" 
-                    or result == "@outputs"
-                    or result == "@autoupdate" then 
-                        return true 
-                    end
-                    return false 
-                end
-            },
-            preprocLine =
-            {
-                pattern = "^@[^\n]*",
-                validation = function(line, buffer, result, tokenIndex, tokens)  
-                    local _, _, txt = string.find(line, "^(@[^ ]*)")
-                    if txt == "@name" 
-                    or txt == "@trigger" 
-                    or txt == "@model" then 
-                        return true 
-                    end
-                    return false 
-                end
-            },
-            variables = 
-            {
-                pattern     = "[A-Z][a-zA-Z0-9_]*",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
-                    return isSpecial(line[buffer - 1]) == true 
-                end,
-            },
-            keywords = 
-            {
-                pattern = "[a-z][a-zA-Z0-9_]*",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
-                    if not line then return false end 
-                    if result == "function" then 
-                        local _,_,str = string.find(line, "^%s*([^ ]*)", 1)
-                        if str ~= "function" then return false end 
-                    end
-                    return keywords[result] and isSpecial(line[buffer - 1]) == true
-                end
-            },
-            userfunctions = 
-            {
-                pattern = "[a-z][a-zA-Z0-9_]*",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
-                    if keywords[result] then 
-                        return false 
-                    end
 
-                    local function getPrevToken(index)
-                        return tokens[tokenIndex - index] or {}
-                    end
-                    --[[
-                                            function someFunction()     
-                                    function someType:someFunction()
-                                    function someType someFunction()
-                        function someType someType:someFunction()
-                           5    4    3   2    1   0
-                    ]]
-
-                    local res = false 
-                    if getPrevToken(1).text == "function" or getPrevToken(3).text == "function" or getPrevToken(5).text == "function" then 
-                        res = true 
-                    end
-
-                    return res == true and line[buffer + #result] == "(" and isSpecial(line[buffer - 1]) == true 
-                end,
-                reparseOnChange = true 
-            },
-            builtinFunctions = 
+        matches = {
+            numbers = 
             {
-                pattern = "[a-z][a-zA-Z0-9_]*",
-                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex, tot) 
-                    if keywords[result] then 
-                        return false 
-                    end
-
-                    for i, lineCache in pairs(E2Cache) do -- Need cache for every line so if something cached gets removed it can be updated
-                        if i > lineIndex then continue end 
-                        if lineCache[result] then 
-                            return "userfunctions" 
-                        end
-                    end 
-
-                    local extraCheck = true 
-
-                    if E2Lib then 
-                        if not wire_expression2_funclist[result] then 
-                            extraCheck = false 
-                        end
-                    else 
-                        local prevToken = tokens[tokenIndex - 1]
-
-                        if prevToken and prevToken.text and prevToken.type then 
-                            if prevToken.type == "types" or prevToken.text == "function" then 
-                                return "userfunctions"
-                            end
-                        end  
-                    end 
-
+                pattern = "[0-9][0-9.e]*",
+                validation = function(line, buffer, result, tokenIndex) 
                     local function nextChar(char)
                         return line[buffer + #result] == char  
                     end
-
-                    return nextChar("(") and extraCheck and isSpecial(line[buffer - 1]) == true 
-                end
-            },
-            types = 
-            {
-                pattern = "[a-z][a-zA-Z0-9_]*",
-                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex, tOther) 
-                    if keywords[result] then 
-                        return false 
-                    end
-
-                    local function nextChar(char)
-                        return line[buffer + #result] == char  
-                    end
-                    
-                    local extraCheck = true  
-
-                    if E2Lib then 
-                        local function istype(tp)
-                            return wire_expression_types[tp:upper()] or tp == "number" or tp == "void"
-                        end
-                        extraCheck = istype(result)
-                        if extraCheck == false then 
-                            if wire_expression2_funclist[result] and isSpecial(line[buffer - 1]) == true then 
-                                return "builtinFunctions" 
-                            end
-                        end
-                    end
-
-                    return (nextChar("]") or nextChar(" ") or nextChar(":") or nextChar("=") or nextChar(",") or nextChar("") or nextChar(")")) and extraCheck and isSpecial(line[buffer - 1]) == true 
-                end
-            },
-            includeDirective = 
-            {
-                pattern = "#include",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
-                    return line[buffer + #result] == " "
-                end
-            },
-            ppcommands = 
-            {
-                pattern = "#[a-z]+",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
-                    local res = result == "#ifdef" 
-                                or result == "#else" 
-                                or result == "#endif" 
-
-                    return res 
-                end
-            },
-            constants = 
-            {
-                pattern = "_[A-Z][A-Z_0-9]*",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
-                    if E2Lib then 
-                        return wire_expression2_constants[result] ~= nil 
-                    end
-                    return true  
+                    if nextChar("x") or nextChar("b") then return false end 
+                    return true 
                 end
             },
             lineComment = 
             {
-                pattern = "#[^\n]*",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
-                    local _, _, txt = string.find(result, "(#[^ ]*)")
-                    if txt == "#ifdef" 
-                    or txt == "#include"
-                    or txt == "#else" 
-                    or txt == "#endif"
-                    or string.sub(txt, 1, 2) == "#[" then return false end 
-                    return true 
-                end
+                pattern = "%-%-[^\n]*",
+                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex) 
+                    local nextChar = line[buffer + 2] or ""
+                    local nextChar2 = line[buffer + 3] or ""
+                    return nextChar ~= "[" and nextChar2 ~= "["
+                end,
+                color = "comments"
             },
-            decimals = 
+            doubleDot = 
             {
-                pattern = "[0-9][0-9.e]*",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
-                    local function nextChar(char)
-                        return line[buffer + #result] == char  
-                    end
-
-                    if nextChar("x") or nextChar("b") then return false end 
-
-                    return true 
-                end
+                pattern = "%.%.",
+                color = "wordops"
+            },
+            tripleDot = 
+            {
+                pattern = "%.%.%.",
+                color = "keywords"
             },
             hexadecimals = 
             {
-                pattern = "0[xb][0-9A-F]+"
-            }
+                pattern = "0[xb][0-9A-F]+",
+                color = "numbers"
+            },
+            
+            variables = {
+                pattern = "[a-zA-Z_][a-zA-Z0-9_]*",
+                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex) 
+                    local prevChar = line[buffer - 1] or ""
+                    local nextChar = line[buffer + #result] or ""
+
+                    if isSpecial(prevChar) == false or isSpecial(nextChar) == false then return false end 
+
+                    local r        = string.sub(line, buffer + #result, #line) or ""
+                    local l        = string.sub(line, 1, buffer - 1) or ""
+                    local right    = string.gsub(r, "%s*", "") or ""
+                    local left     = string.gsub(l, "%s*", "") or ""   
+
+                    -- Booleans detection
+                    if result == "false" or result == "true" then 
+                        return "bools"  
+                    end
+
+                    -- Constants detection
+                    if result == "_G" or result == "_VERSION" then 
+                        return "globals"
+                    end
+
+                    -- nil detection
+                    if result == "nil" then 
+                        return "null" 
+                    end
+
+                    -- Character operator detection
+                    if result == "and" or result == "or" or result == "not" then 
+                        return "wordops"
+                    end
+
+                    -- Keywords detection
+                    if keywords[result] then 
+                        return "keywords" 
+                    end
+
+                    -- self detection 
+                    if result == "self" then 
+                        return "funcself" 
+                    end
+
+                    if result == "collectgarbage" and right[1] == "(" then 
+                        return "garbagecollector"  
+                    end
+
+                    -- STD-Lib detection
+                    if nextChar == "." or prevChar == "=" then 
+                        if builtinlibs[result] then 
+                            return "builtinlibs"
+                        end
+                    end
+
+                    if metamethods[result] then 
+                        return "metamethods" 
+                    end
+
+                    -- Function names and Function parameters
+                    do 
+                        local isParam = false 
+                        local tkI = tokenIndex
+                        local token = tokens[tokenIndex]
+                        if token then 
+                            while token and token.type ~= "keywords" and tkI > 1 and token.text ~= ")" do 
+                                if token.text == "(" then 
+                                    isParam = true 
+                                end
+                                tkI = tkI - 1
+                                token = tokens[tkI]
+                            end
+                            if token and token.text == "function" then 
+                                if isParam == true then 
+                                    return "funcparam" 
+                                end
+                                return "func" 
+                            end 
+                        end
+                    end
+
+
+                    -- STD-Funcs from STD-Libs detection
+                    if prevChar == "." then 
+                        local prevToken = tokens[tokenIndex - 1] or {}
+                        if prevToken.type == "builtinlibs" and (stdfuncs[prevToken.text] or {})[result] then 
+                            return "stdfuncs" 
+                        else 
+                            return "varprops" 
+                        end
+                    end
+
+                    -- STD-Funcs without Lib
+                    if builtinfuncs[result] and ((right[1] == "(" or right[1] == '"') or left[#left] == "=") then 
+                        return "builtinfuncs" 
+                    end
+
+                    if right[1] == "(" then
+                        return "customfuncs" 
+                    end
+
+                    return true 
+                end
+            },
+            metamethods = {},
+            funcself = {},
+            null = {color = "constants"},
+            bools = {color = "constants"},
+            constants = {},
+            globals = {color = "constants"},
+            keywords = {},
+            wordops = {color = "operators"},
+            builtinlibs = {},
+            builtinfuncs = {},
+            stdfuncs = {},
+            func = {},
+            funcparam = {},
+            customlibs = {},
+            varprops = {},
+            customfuncs = {},
+            garbagecollector = {}
         },
         captures = 
         {
@@ -1457,33 +1653,64 @@ do
 
                         return stepper == 0 or stepper % 2 == 0   
                     end
-                }
+                },
+                multiline = false 
+            },
+            strings2 = 
+            {
+                begin = {
+                    pattern = "'"
+                },
+                close = {
+                    pattern = "'",
+                    validation = function(line, buffer, result, tokenIndex, tokens) 
+                        local stepper = 0
+                        local prevChar = line[buffer - 1 - stepper] or ""
+
+                        while prevChar == "\\" do 
+                            stepper = stepper + 1
+                            prevChar = line[buffer - 1 - stepper]
+                        end
+
+                        return stepper == 0 or stepper % 2 == 0   
+                    end
+                },
+                multiline = false,
+                color = "strings"
+            },
+            multilinesStrings = 
+            {
+                begin = {
+                    pattern = '%[%[',
+                    validation = function(line, buffer, result, tokenIndex, tokens) 
+                        local prevChar = line[buffer - 1] or ""
+                        local prevChar2 = line[buffer - 2] or ""
+                        if prevChar ~= "-" and prevChar2 ~= "-" then return true end 
+                        return false 
+                    end
+                },
+                close = {
+                    pattern = '%]%]',
+                },
+                color = "strings"
             },
             comments = 
             {
                 begin = {
-                    pattern = '#%['
+                    pattern = '%-%-%[%['
                 },
                 close = {
-                    pattern = '%]#'
+                    pattern = '%]%]'
                 }
-            }
+            },
         },
-
-        onLineParseStarted = function(i, text)
-            E2Cache[i] = {}
+        onLineParseStarted = function(i)
         end,
 
         onLineParsed = function(result, i)  
-
         end,
 
         onMatched = function(result, i, type, buffer, prevTokens) 
-            if type == "userfunctions" then 
-                E2Cache = E2Cache or {}
-                if not E2Cache[i] then E2Cache[i] = {} end 
-                E2Cache[i][result] = 1
-            end
         end,
 
         onCaptureStart = function(result, i, type, buffer, prevTokens) 
@@ -1493,33 +1720,10 @@ do
         end,
         
         onTokenSaved = function(result, i, type, buffer, prevTokens) 
-        end,
+        end
+    }
 
-        colors = 
-        {
-            preprocDirective = Color(240,240,160),
-            preprocLine      = Color(240,240,160),
-            operators        = Color(255,255,255),
-            scopes           = Color(255,255,255),
-            parenthesis      = Color(255,255,255),
-            strings          = Color(150,150,150),
-            comments         = Color(128,128,128),
-            lineComment      = Color(128,128,128),
-            variables        = Color(160,240,160),
-            decimals         = Color(247,167,167),
-            hexadecimals     = Color(247,167,167),
-            keywords         = Color(160,240,240),
-            includeDirective = Color(160,240,240),
-            builtinFunctions = Color(160,160,240),  
-            userfunctions    = Color(102,122,102),
-            types            = Color(240,160,96),
-            constants        = Color(240,160,240),
-            ppcommands       = Color(240,96,240),
-            error            = Color(241,96,96),
-            others           = Color(241,96,96)
-        }}
-
-        DataContext:SetRulesProfile(prof)
+    DataContext:SetRulesProfile(prof)
 end 
 
 local fontBank = {}
@@ -1566,11 +1770,11 @@ function self:Init()
     self.colors.linesEditorDivider = Color(240,130,0, 100)
     self.colors.lineNumbers = Color(240,130,0)
 
-    self.colors.highlights = Color(0,60,220,60)
-    self.colors.selection = Color(185, 230, 45, 50)
+    self.colors.highlights = Color(0,60,220,35)
+    self.colors.selection = Color(0,60,220,90)
 
     self.colors.caret = Color(25,175,25)
-    self.colors.endOfText = dark(150,5)
+    self.colors.endOfText = dark(150,10)
 
     self.colors.tabIndicators = Color(175,175,175,35)
     self.colors.caretAreaTabIndicator = Color(175,175,175,125)
@@ -1583,6 +1787,8 @@ function self:Init()
     self.colors.foldsPreviewBackground = dark(35)
     self.colors.amountOfFoldedLines = Color(10,255,10,75)
 
+    self.colors.pairHighlights = dark(255, 255)
+
     self.tabSize = 4
 
     self.caret = {
@@ -1593,7 +1799,10 @@ function self:Init()
         actualLine = 1
     }
     self.lastCaret = table.Copy(self.caret)
+    self.lastCaret.char = -1 
+
     self.lastCaretClick = table.Copy(self.caret)
+    self.lastCaretClick.char = -1 
 
     self.caretBlink = RealTime()
 
@@ -1604,7 +1813,7 @@ function self:Init()
     self.highlights = {}
     self.selection = {
         start = {
-            char = 0,
+            char = -1,
             line = 0
         },
         ending = {
@@ -1636,7 +1845,7 @@ function self:Init()
     }
 
     self.refresh = 0
-    self.mouseCounter = 0
+    self.mouseCounter = 1
 
     self.foldButtons = {}
 
@@ -1649,17 +1858,35 @@ function self:Init()
 
     self.data = table.Copy(DataContext)
 
-    self.data.LineFolded = function(_, line, len)
+    self.data.LineFolded = function(_, line, len, b)
+        self:ClearHighlights()
+        self.pressedWord = nil 
         self:ResetBGProg()
         self:GetTabLevels()
+        self:UpdateSurroudingPairs()
+
+        b = b.button
+
+        if IsValid(b) == true then 
+            b:SetFolded(true)
+        end
 
         if self.caret.actualLine <= line + len then return end
         self.caret.actualLine = self.caret.actualLine - len 
     end
 
-    self.data.LineUnfolded = function(_, line, len)
+    self.data.LineUnfolded = function(_, line, len, b)
+        self:ClearHighlights()
+        self.pressedWord = nil 
         self:ResetBGProg()
         self:GetTabLevels()
+        self:UpdateSurroudingPairs()
+
+        b = b.button
+
+        if IsValid(b) == true then 
+            b:SetFolded(false)
+        end
 
         if self.caret.actualLine <= line then return end 
         self.caret.actualLine = self.caret.actualLine + len 
@@ -1699,8 +1926,6 @@ function self:Init()
             if not line then return end 
 
             if #super.folding.folds == 0 then  
-                b:SetFolded(true)
-
                 local l = self.data.context[line]
 
                 if not l or not l.folding then
@@ -1719,8 +1944,10 @@ function self:Init()
                 self.data:FoldLine(line)
 
                 if self.caret.line > l.index and self.caret.line <= limit then 
-                    self:SetCaret(self.caret.char, limit + 1) -- if the caret is inside an area that is being folded, push it the fuck out of there xoxoxo
+                    self:SetCaret(self.caret.char, i) -- if the caret is inside an area that is being folded, push it the fuck out of there xoxoxo
                 end
+
+                b:SetFolded(true)
             else 
                 self.data:UnfoldLine(line)
                 self:HideButtons()
@@ -2022,6 +2249,8 @@ function self:TextChanged()
     self:HideButtons()
     self:ClearHighlights()
     self.pressedWord = nil 
+    self:UpdateSurroudingPairs()
+    self:ResetSelection()
    -- self:ResetBGProg()
 end 
 
@@ -2061,8 +2290,25 @@ function self:_KeyCodeReleased(code)
 
 end
 
+function self:OnKeyCombo(key1, key2)
+
+end
 function self:_KeyCodePressed(code)
     self.lastCode = code 
+
+    self:ToggleCaret()
+    
+    do 
+        local keyA 
+
+        if self:IsShift() then 
+            keyA = input.IsKeyDown(KEY_LSHIFT) and KEY_LSHIFT or KEY_RSHIFT
+        elseif self:IsCtrl() then 
+            keyA = input.IsKeyDown(KEY_LCONTROL) and KEY_LCONTROL or KEY_RCONTROL
+        end
+
+        self:OnKeyCombo(keyA, code)
+    end
 
     local line = self.data.context[self.caret.actualLine]
 
@@ -2159,7 +2405,7 @@ function self:_KeyCodePressed(code)
                     if self.caret.char % self.tabSize == 0 then 
                         self.caret.char = self.caret.char - self.tabSize 
                     else 
-                        self.caret.char = self.caret.char - self.caret.char  % self.tabSize 
+                        self.caret.char = self.caret.char - self.caret.char % self.tabSize 
                     end
 
                     local diff = save - self.caret.char 
@@ -2352,6 +2598,200 @@ function self:GetTabLevels()
     end
 end
 
+function self:GetTokenAtPoint(char, line)
+    local line = self.data.context[line]
+    if not line or not line.tokens then return end
+    for i = 1, #line.tokens, 1 do 
+        local token = line.tokens[i]
+        if token.start <= char and token.ending >= char then 
+            return token, char, line, i
+        end
+    end
+end
+
+function self:GetSurroundingPairs(char, line)
+    if not char or not line then return end 
+    if not self.data.profile.closingPairs then return end 
+
+    local token, _, _, tokenIndex = self:GetTokenAtPoint(char, line) 
+
+    if (not token or (not tokenIndex and char == 1)) and line ~= 1 then 
+        line = line - 1
+        local entry = self.data.context[line]
+        if not entry then return end 
+        tokenIndex = #entry.tokens 
+        token = entry.tokens[tokenIndex]
+    end
+
+    if not tokenIndex then return end 
+
+    local function isPair(text)
+        for k, v in pairs(self.data.profile.closingPairs) do 
+            if v.open == text then 
+                return "open", k, v 
+            elseif v.close == text then 
+                return "close", k, v 
+            end
+        end
+    end
+
+    local endArgs 
+    local startArgs 
+    
+    do 
+        local curToken = self.data.context[line].tokens[tokenIndex]
+
+        if curToken then 
+            local type, name, data = isPair(curToken.text) 
+
+            if type and type == "close" then 
+                local prevToken = {}
+
+                local tki = tokenIndex 
+                local tkl = line 
+
+                if tki - 1 < 1 then 
+                    tkl = tkl - 1 
+                    if tkl < 1 then 
+                        prevToken = nil 
+                    else 
+                        tki = #self.data.context[tkl].tokens 
+                    end
+                else 
+                    tki = tki - 1
+                end
+
+                if prevToken then 
+                    prevToken = self.data.context[tkl].tokens[tki]
+                    if prevToken then 
+                        tokenIndex = tokenIndex - 1
+                        token = prevToken 
+                    end 
+                end 
+            end
+        end 
+    end 
+
+    local result = {}
+
+    do 
+        local function findStartPair(index, line)
+            if not index or not line then return end 
+
+            local counter = {}
+
+            while true do 
+                if index < 1 then 
+                    line = line - 1 
+                    if not self.data.context[line] or line < 1 then return end 
+                    index = #self.data.context[line].tokens 
+                    if not index then continue end 
+                end
+
+                local token = self.data.context[line].tokens[index]
+
+                if token then 
+                    local type, name, data = isPair(token.text)
+
+                    if type == "open" then
+                        if counter[name] == nil then counter[name] = 0 end  
+
+                        if counter[name] == 0 then 
+                            return index, line, token, type, name, data
+                        else 
+                            counter[name] = counter[name] - 1
+                        end
+                    elseif type == "close" then 
+                        if counter[name] == nil then counter[name] = 0 end 
+                        counter[name] = counter[name] + 1
+                    end
+                end 
+
+                index = index - 1
+            end 
+        end
+
+        startArgs = {findStartPair(tokenIndex, line)}
+
+        if #startArgs == 0 then return end 
+
+        result.start = {
+            tkIndex = startArgs[1],
+            line = startArgs[2]
+        }
+    end
+
+    do 
+        local function findClosePair(index, line, key)
+            if not index or not line then return end 
+
+            local counter = 0
+
+            while true do 
+                local item = self.data.context[line]
+
+                if not item or not item.tokens then return end 
+
+                if index > #item.tokens then
+                    index = 1
+                    line = line + 1
+                    if line > #self.data.context then return end 
+                end
+
+                local token = self.data.context[line].tokens[index]
+
+                if not token then return end 
+
+                local type, name, data = isPair(token.text)
+
+                if key then 
+                    if name and name == key then 
+                        if type == "close" then 
+                            if counter == 0 then 
+                                return index, line, token, type, name, data 
+                            else 
+                                counter = counter - 1 
+                            end
+                        elseif type == "open" then 
+                            counter = counter + 1
+                        end
+                    end
+                elseif type == "close" then 
+                    return index, line, token, type, name, data 
+                end
+
+                index = index + 1
+            end
+        end
+
+        endArgs = {findClosePair(tokenIndex + 1, line, (startArgs ~= nil and startArgs[5] or nil))}
+
+        if #endArgs > 0 then 
+            result.ending = {
+                tkIndex = endArgs[1],
+                line = endArgs[2]
+            }
+        end 
+    end 
+
+    return result 
+end
+
+function self:RefreshCaretMoveTimer()
+    self.caretMoveTimer = RealTime() + 0.2
+end
+
+function self:UpdateSurroudingPairs()
+    self.surroundingPairs = self:GetSurroundingPairs(self.caret.char, self.caret.actualLine)
+end
+
+function self:CaretStoppedMovingHandler()
+    if not self.caretMoveTimer then return end  
+    if RealTime() > self.caretMoveTimer then 
+        self:UpdateSurroudingPairs()
+    end 
+end
+
 function self:TimeRefresh(len)
     self.refresh = RealTime() + (len or 1) 
 end
@@ -2420,55 +2860,61 @@ end
 
 function self:CaretSet(char, line, actualLine) end 
 function self:SetCaret(...)
-    if #{...} < 2 then return end 
+    function self:SetCaret(...)
+        if #{...} < 2 then return end 
+    
+        local char, line, swapOnReach = select(1, ...), select(2, ...), select(3, ...)
 
-    local char, line, swapOnReach = select(1, ...), select(2, ...), select(3, ...)
-
-    if swapOnReach == nil then swapOnReach = false end 
-
-    local actualLine = self:KeyForIndex(line)
-
-    if not actualLine then 
-        local last = self.caret.actualLine
-        
-        if self.lastCode == KEY_UP or self.lastCode == KEY_LEFT then 
-            actualLine = last - 1
-        elseif self.lastCode == KEY_DOWN or self.lastCode == KEY_RIGHT then   
-            actualLine = last + 1
-        else return end  
-
-        actualLine = math.Clamp(actualLine, 1, #self.data.context)
-
-        line = self.data.context[actualLine].index
-    end
-
-    self.lastCaret = table.Copy(self.caret)
-
-    self.caret.line = math.max(line, 1)
-    self.caret.actualLine = actualLine -- We save this to avoid shitty loops all over the place 
-
-    if swapOnReach == false then 
-        self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
-    else
-        if char > #self.data.context[actualLine].text and self.lastCode == KEY_RIGHT then 
-            if not self.data.context[actualLine + 1] then return end  
-            self:SetCaret(0, self.caret.line + 1)
-        elseif char < 0 and (self.lastCode == KEY_LEFT or self.lastCode == KEY_BACKSPACE) then 
-            self:SetCaret(#((self.data.context[actualLine - 1] or {}).text or ""), self.caret.line - 1)
-        else
-            self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
+        self.lastCaret = table.Copy(self.caret)
+    
+        if self.caret.char ~= char or self.caret.line ~= line then 
+            if swapOnReach == nil then swapOnReach = false end 
+    
+            local actualLine = self:KeyForIndex(line)
+    
+            if not actualLine then 
+                local last = self.caret.actualLine
+                
+                if self.lastCode == KEY_UP or self.lastCode == KEY_LEFT then 
+                    actualLine = last - 1
+                elseif self.lastCode == KEY_DOWN or self.lastCode == KEY_RIGHT then   
+                    actualLine = last + 1
+                else return end  
+    
+                actualLine = math.Clamp(actualLine, 1, #self.data.context)
+    
+                line = self.data.context[actualLine].index
+            end
+    
+            self.caret.line = math.max(line, 1)
+            self.caret.actualLine = actualLine -- We save this to avoid shitty loops all over the place 
+    
+            if swapOnReach == false then 
+                self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
+            else
+                if char > #self.data.context[actualLine].text and self.lastCode == KEY_RIGHT then 
+                    if not self.data.context[actualLine + 1] then return end  
+                    self:SetCaret(0, self.caret.line + 1)
+                elseif char < 0 and (self.lastCode == KEY_LEFT or self.lastCode == KEY_BACKSPACE) then 
+                    self:SetCaret(#((self.data.context[actualLine - 1] or {}).text or ""), self.caret.line - 1)
+                else
+                    self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
+                end
+            end
+    
+            self:ToggleCaret()
+    
+            self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
+    
+            self.data:ValidateFoldingAvailability(self.caret.actualLine) 
+    
+            self:Goto()
+    
+            self:RefreshCaretMoveTimer()
         end
+    
+        return self.caret.line, self.caret.char 
     end
-
-    self:ToggleCaret()
-
-    self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
-
-    self.data:ValidateFoldingAvailability(self.caret.actualLine) 
-
-    self:Goto()
-
-    return self.caret.line, self.caret.char 
 end
 
 function self:GetTextArea(startChar, startLine, endChar, endLine)
@@ -2651,7 +3097,7 @@ function self:OnMousePressed(code)
         
         local line = self.data.context[self.caret.actualLine]
 
-        ::redo:: 
+        ::HandleNewMouseCounter:: 
 
         if line and tableSame(self.caret, self.lastCaretClick) == true then 
             self:ClearHighlights()
@@ -2661,12 +3107,12 @@ function self:OnMousePressed(code)
 
                 if not start then 
                     self.mouseCounter = self.mouseCounter + 1
-                    goto redo
+                    goto HandleNewMouseCounter
                 end
 
                 self:SetSelection(start, self.caret.actualLine, ending, self.caret.actualLine)
             elseif self.mouseCounter == 2 then 
-                self:SetSelection(0, self.caret.actualLine, #line.text, self.caret.actualLine)
+                self:SetSelection(0, self.caret.actualLine, 0, math.min(self.caret.actualLine + 1, #self.data.context))
             else
                 self:ResetSelection() 
             end
@@ -2756,7 +3202,7 @@ function self:Goto(char, line)
 end
 
 function self:AddHighlight(a, b, c, d)
-    ::checkFunc::
+    ::CheckParamsAgain::
 
     if a == nil or b == nil then return end 
     
@@ -2766,7 +3212,7 @@ function self:AddHighlight(a, b, c, d)
         b = a.line 
         a = a.char 
 
-        goto checkFunc 
+        goto CheckParamsAgain 
     end 
 
     table.insert(self.highlights, {
@@ -2900,6 +3346,48 @@ function self:PaintCaret(x, w, i, c, index)
     end
 end 
 
+function self:PaintHighlights(i, c)
+    if #self.highlights > 0 then 
+        for _, v in ipairs(self.highlights) do 
+            self:Highlight(v.start, v.ending, i, c)
+        end
+    end
+end
+
+function self:PaintSurroundingPairs(i, c)
+    if not self.surroundingPairs then return end 
+    surface.SetDrawColor(self.colors.pairHighlights)
+
+    local s = self.surroundingPairs.start 
+    local e = self.surroundingPairs.ending 
+
+    if s and e and s.line == e.line and s.tkIndex + 1 == e.tkIndex and i == s.line then 
+        local startToken = self.data.context[s.line].tokens[s.tkIndex]
+        local endToken   = self.data.context[e.line].tokens[e.tkIndex]
+        if startToken and endToken then 
+            local x, y = self:pop(startToken.start - 1, c)
+            surface.DrawOutlinedRect(x, y, (#startToken.text + #endToken.text) * self.font.w, self.font.h, 1)
+            return 
+        end 
+    end
+
+    if s and s.line == i then 
+        local token = self.data.context[s.line].tokens[s.tkIndex]
+        if token then 
+            local x, y = self:pop(token.start - 1, c)
+            surface.DrawOutlinedRect(x, y, #token.text * self.font.w, self.font.h, 1)
+        end 
+    end
+    
+    if e and e.line == i then 
+        local token = self.data.context[e.line].tokens[e.tkIndex]
+        if token then 
+            local x, y = self:pop(token.start - 1, c)
+            surface.DrawOutlinedRect(x, y, #token.text * self.font.w, self.font.h, 1)
+        end 
+    end
+end
+
 function self:Paint(w, h)
     self:PaintBefore(w, h)
 
@@ -2948,14 +3436,30 @@ function self:Paint(w, h)
         end
 
         -- Highlights
-        if #self.highlights > 0 then 
-            for _, v in ipairs(self.highlights) do 
-                self:Highlight(v.start, v.ending, i, c)
+        self:PaintHighlights(i, c)
+
+        -- Surrounding Pairs 
+        self:PaintSurroundingPairs(i, c)
+
+        do -- Tab Indicators 
+            local tab = self.allTabs[cLine.index]
+
+            if tab then 
+                for n = 2, tab, 1 do 
+                    local tabLen = (n - 1) * self.tabSize
+
+                    if tabLen < 0 or (tabLen >= getLeftLen(cLine.text) and cLine.text ~= "") then break end 
+
+                    local posX = (tabLen - math.max(self.textPos.char - 1, 0)) * self.font.w
+
+                    if posX < 0 then continue end 
+
+                    draw.RoundedBox(0, x + posX, c * self.font.h, 1, self.font.h, self.colors.tabIndicators)
+                end
             end
-        end
+        end 
 
-        local skips = 0
-
+        -- Code Folding Indication and Preview 
         if IsValid(cLine.button) and cLine.folding and cLine.folding.folds then 
             cLine.button:SetSize(offset * 0.75, cLine.button:GetWide())
             cLine.button:SetVisible((mx > 0 and mx <= textoffset + x) or (#cLine.folding.folds > 0))
@@ -3006,31 +3510,13 @@ function self:Paint(w, h)
         elseif cLine.button ~= nil then self.data.context[i].button = nil
         elseif IsValid(cLine.button) and cLine.folding and cLine.folding.folds then self:HandleBadButton(cLine.button) end 
 
-        do -- Tab Indicators 
-            local tab = self.allTabs[cLine.index + skips]
-
-            if tab then 
-                for n = 2, tab, 1 do 
-                    local tabLen = (n - 1) * self.tabSize
-
-                    if tabLen < 0 or (tabLen >= getLeftLen(cLine.text) and cLine.text ~= "") then break end 
-
-                    local posX = (tabLen - math.max(self.textPos.char - 1, 0)) * self.font.w
-
-                    if posX < 0 then continue end 
-
-                    draw.RoundedBox(0, x + posX, c * self.font.h, 1, self.font.h, self.colors.tabIndicators)
-                end
-            end
-        end 
-
         i = i + 1
         c = c + 1
     
         if i > #self.data.context then break end 
     end
 
-    self.scroller:SetUp(visLines + 1, #self.data.context + visLines / 2)
+    self.scroller:SetUp(visLines + 1, #self.data.context + visLines)
 
     -- End of Text box 
     local diff = -(i - visLines) + 1 + self.scroller:GetScroll()
@@ -3101,19 +3587,30 @@ function self:Think()
     if input.IsMouseDown(MOUSE_LEFT) == true then 
         if vgui.GetHoveredPanel() == self and self.scroller.Dragging == false and self.mouseCounter == 1 then 
             self:SetCaret(self:pit(self:LocalCursorPos()))
-            self:SetSelection(self.selection.start.char, self.selection.start.line, self.caret.char, self.caret.actualLine)
-            
+
+            if self.selectionStartFix then 
+                self:SetSelection(self.selection.start.char, self.selection.start.line, self.caret.char, self.caret.actualLine)
+            else 
+                self.selectionStartFix = true 
+                self:ResetSelection()
+            end
+
             if self.selection.start.line == self.selection.ending.line and self.selection.start.char ~= self.selection.ending.char then 
                 self:HighlightSelectedWords()
-            elseif (self.selection.start.line == self.selection.ending.line and self.selection.start.char == self.selection.ending.char and tableSame(self.caret, self.lastCaret) == false) or self.selection.start.line ~= self.selection.ending.line then 
+            elseif 
+            (self.selection.start.line == self.selection.ending.line and self.selection.start.char == self.selection.ending.char and tableSame(self.caret, self.lastCaret) == false) 
+            or self.selection.start.line ~= self.selection.ending.line 
+            then 
                 self:ClearHighlights()
-            end
+            end 
+
         end
     elseif self:IsShift() == true then 
         self:HighlightSelectedWords()
     end
 
     self:ContinueBackgroundWorker()
+    self:CaretStoppedMovingHandler()
 
     self.lastTextPos = table.Copy(self.textPos)
 end
@@ -3180,25 +3677,59 @@ local function open()
 	TESTWINDAW.view:Dock(FILL)
     TESTWINDAW.view:SetFont("Consolas", 16)
 
-    TESTWINDAW.view:SetText([["
-while(1)
-{
-
-
-    if(1)
-    {
-        if(2)
-        {
-            allTabs
-
-            a
-        }
-    }
-}
-       
-"
-        ]])
-        TESTWINDAW.view:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
+    TESTWINDAW.view:SetText([[function DataContext:SmartFolding(startLine) -- Uses Whitespace differences to detect folding
+        if not self.context[startLine] then return end 
+    
+        if string.gsub(self.context[startLine].text, "%s", "") == "" then return end 
+    
+        local startLeft = getLeftLen(self.context[startLine].text)               
+        local nextLeft  = getLeftLen((self.context[startLine + 1] or {}).text)     
+    
+        local function peekNextFilledLine(start, minLen)
+            start = start + 1
+    
+            while self.context[start] and (string.gsub((self.context[start] or {}).text or "", "%s", "") == "") do  
+                if minLen and getLeftLen(self.context[start].text) < minLen then break end 
+                start = start + 1
+            end
+    
+            return self.context[start], start
+        end
+    
+        if nextLeft <= startLeft then -- If its smaller, then check if its a whitespace line, if yes, skip all of them until the first filled comes up, then check again.
+            local nextFilled, lookup = peekNextFilledLine(startLine, nextLeft)
+    
+            if not nextFilled or lookup - 1 == startLine then return end 
+    
+            startLine = lookup
+            nextLeft = getLeftLen(nextFilled.text)     
+        
+            if nextLeft <= startLeft then return end 
+        end 
+    
+        startLine = startLine + 2 
+    
+        -- uwu so many while luwps howpfuwwy it doewsnt fwuck up x3 (may god have mercy with my soul)
+    
+        while true do
+            if not self.context[startLine] then return startLine - 2 end 
+            
+            local currentLeft = getLeftLen(self.context[startLine].text) 
+    
+            if currentLeft < nextLeft then 
+                local nextReal = peekNextFilledLine(startLine - 1)
+    
+                if not nextReal or (nextReal.text ~= "" and getLeftLen(nextReal.text) < nextLeft) then 
+                    return startLine - 2
+                end  
+            end
+    
+            startLine = startLine + 1
+        end
+    
+        return startLine
+    end]])
+    --    TESTWINDAW.view:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
 --  TESTWINDAW.view:SetText(file.Read("expression2/libraries/e2parser_v2.txt", "DATA"))
 
 end
