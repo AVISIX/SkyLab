@@ -13,6 +13,11 @@
         - When closing the editor, save the folds in the sqlite db and save the timestamp. if the file was edited after that specific timestamp, reset the folds to unfolded 
 ]]
 
+local function swap(a, b)
+    local save = (type(a) == "table" and table.Copy(a) or a)
+    return b, save 
+end
+
 local DataContext = {}
 DataContext.__index = DataContext
 
@@ -454,6 +459,150 @@ function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
     return result
 end
 
+function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine)
+    if not startChar and not startLine then return end 
+
+    if type(startChar) == "table" and type(startLine) == "table" then 
+        endChar   = startLine.char 
+        endLine   = startLine.line 
+        startLine = startChar.line 
+        startChar = startChar.char 
+    end
+
+    if startLine == endLine then 
+        if startChar > endChar then 
+            startChar, endChar = swap(startChar, endChar)
+        end
+
+        local entry = self.context[startLine]
+
+        if not entry then return "" end 
+
+        self:OverrideLine(startLine, string.sub(entry.text, 1, startChar) .. string.sub(entry.text, endChar + 1, #entry.text))
+
+        return startChar, startLine, endChar, endLine
+    elseif startLine > endLine then  
+        startLine, endLine = swap(startLine, endLine)
+        startChar, endChar = swap(startChar, endChar)
+    end
+
+    startLine = math.max(startLine, 1)
+
+    local sl = self.context[startLine]
+    local el = self.context[endLine]
+
+    if not sl or not el then return end 
+
+    sl = sl.text 
+    el = el.text 
+
+    self:OverrideLine(startLine, string.sub(sl, 1, startChar) ..string.sub(el, endChar + 1, #el))
+
+    for i = startLine, endLine - 1, 1 do 
+        self:RemoveLine(startLine + 1)
+    end
+
+    return startChar, startLine, endChar, endLine
+end
+
+function DataContext:GetTextArea(startChar, startLine, endChar, endLine)
+    if not startChar and not startLine then return end 
+
+    if type(startChar) == "table" and type(startLine) == "table" then 
+        endChar   = startLine.char 
+        endLine   = startLine.line 
+        startLine = startChar.line 
+        startChar = startChar.char 
+    end
+
+    if startLine == endLine then 
+        if startChar > endChar then 
+            startChar, endChar = swap(startChar, endChar)
+        end
+
+        local entry = self.context[startLine]
+
+        if not entry then return "" end 
+
+        return string.sub(entry.text, startChar + 1, endChar)
+    elseif startLine > endLine then  
+        startLine, endLine = swap(startLine, endLine)
+        startChar, endChar = swap(startChar, endChar)
+    end
+
+    startLine = math.max(startLine, 1)
+
+    local result = ""
+
+    local function recursiveAdd(collection)
+        local r = ""
+        for k, v in pairs(collection) do 
+            r = r .. v.text .. "\n"
+            if v.folding and #v.folding.folds > 0 then 
+                r = r .. recursiveAdd(v.folding.folds)
+            end
+        end
+        return r 
+    end 
+
+    for i = startLine, endLine, 1 do 
+        local entry = self.context[i]
+
+        if not entry then break end 
+
+        local text = entry.text 
+
+        if i == startLine then 
+            result = result .. string.sub(text, startChar + 1, #text) .. "\n"
+        elseif i == endLine then 
+            result = result .. string.sub(text, 1, endChar) 
+        else 
+            result = result .. text .. "\n"
+        end
+
+        if entry.folding and #entry.folding.folds > 0 then 
+            result = result .. recursiveAdd(entry.folding.folds)
+        end
+    end
+
+    return result 
+end
+
+function DataContext:InsertTextAt(text, char, line)
+    if not text or not char or not line then return end 
+
+    local entry = self.context[line]
+        
+    if not entry then return end 
+
+    local lines = string.Split(text, "\n")
+
+    if #lines == 1 then 
+        text = lines[1]
+        
+        local left = string.sub(entry.text, 1, char) .. text
+
+        self:OverrideLine(line, left .. string.sub(entry.text, char + 1, #entry.text))
+
+        return #left, line
+    end
+
+    local left  = string.sub(entry.text, 1, char)
+    local right = string.sub(entry.text, char + 1, #entry.text)
+
+    self:OverrideLine(line, left .. lines[1])
+
+    for i = #lines, 2, -1 do 
+        if i == #lines then 
+            self:InsertLine(line + 1, lines[i] .. right)
+        else 
+            self:InsertLine(line + 1, lines[i])
+        end
+    end
+
+    return #lines[#lines], (line + #lines - 1)
+end 
+
 function DataContext:CountIndentation(tokens, tokenCallback)
     if not tokens or #tokens == 0 then return end 
 
@@ -553,6 +702,77 @@ function DataContext:FindMatchDown(tokenIndex, lineIndex)
     end
 
     return curToken, tokenIndex, lineIndex
+end
+
+local function compareLines(A, B)
+    if not A or not B then return nil end 
+
+    local aL = {}
+    local bL = {}
+
+    do 
+        local aT = type(A)
+        local bT = type(B)
+
+        if aT == "string" then 
+            aL = string.Split(A, "\n")
+        elseif aT == "table" then 
+            aL = A 
+        else return 0, 0 end 
+
+        if bT == "string" then 
+            bL = string.Split(B, "\n")
+        elseif bT == "table" then 
+            bL = B 
+        else return nil end 
+    end 
+
+    -- Remove every common suffix 
+    local eL = 0 
+    if #aL ~= #bL then 
+        eL = (#aL > #bL and #aL or #bL)
+    else 
+        eL = #aL 
+        while eL >= 1 and aL[eL] == bL[eL] do  
+            eL = eL - 1
+        end
+    end
+
+    -- They are the same 
+    if eL == 0 then return {0,0} end
+
+    -- Remove every common prefix 
+    local sL = 1
+    while aL[sL] == bL[sL] and sL < eL do  
+        sL = sL + 1
+    end
+
+    -- Returns the Start and End of area where lines werent the same 
+    return {sL, eL}
+end
+
+-- Call this function to save the current context
+function DataContext:Record() 
+    self.record = self:GetLines()
+end 
+
+-- Call this function to compare the saved context with the current context
+function DataContext:Compare()
+    if not self.record then return end 
+
+    local startLine, endLine = compareLines(self.record, self:GetLines())
+
+    print(startLine .. " " .. endLine)
+
+    self.record = nil 
+end
+
+function DataContext:Undo()
+
+end
+
+function DataContext:Redo()
+
 end
 
 local function getLeftLen(str)
@@ -711,7 +931,7 @@ function DataContext:FixIndeces() -- Extremely important function to keep the li
     local c = 1
 
     local function recursiveFix(entry)
-        for k, v in pairs(entry) do 
+        for k, v in ipairs(entry) do 
             entry[k].index = c 
             c = c + 1
             if v.folding and v.folding.folds then 
@@ -841,6 +1061,8 @@ end
 
 function DataContext:GetText()
     local function recursiveAdd(collection)
+        local temp = ""
+
         for i = 1, #collection, 1 do 
             local item = collection[i]
             
@@ -856,7 +1078,31 @@ function DataContext:GetText()
         return temp 
     end
 
-    return recursiveAdd(self.context, true) 
+    return recursiveAdd(self.context) 
+end
+
+function DataContext:GetLines()
+    local result = {}
+
+    local function recursiveAdd(collection)
+        for i = 1, #collection, 1 do 
+            local item = collection[i]
+
+            if not item or not item.text then break end
+
+            table.insert(result, item.text)
+
+            if item.folding and #item.folding.folds > 0 then
+                recursiveAdd(item.folding.folds)
+            end
+        end
+        
+        return temp 
+    end
+
+    recursiveAdd(self.context) 
+
+    return result 
 end
 
 function DataContext:UnfoldAll()
@@ -983,6 +1229,7 @@ function DataContext:FixFolding(i)
         if self.context[i].folding then  
             if self:ValidateFoldingAvailability(i) == true then break end 
         end 
+        
         i = i - 1
     end
 end
@@ -993,9 +1240,10 @@ function DataContext:InsertLine(i, text)
 
     table.insert(self.context, math.min(i, #self.context + 1), self:ConstructContextLine(i, text))
 
-    self:FixIndeces()
+    self:ValidateFoldingAvailability(i)
+    self:ValidateFoldingAvailability(i - 1)
 
-    self:FixFolding(i)
+    self:FixIndeces()
 end
 
 function DataContext:RemoveLine(i)
@@ -1006,7 +1254,8 @@ function DataContext:RemoveLine(i)
 
     self:FixIndeces()
 
-    self:FixFolding(i)
+    self:ValidateFoldingAvailability(i)
+    self:ValidateFoldingAvailability(i - 1)
 
     return i 
 end
@@ -1017,9 +1266,10 @@ function DataContext:OverrideLine(i, text)
 
     self.context[i] = self:ConstructContextLine(i, text)
 
-    self:FixIndeces()
+    self:ValidateFoldingAvailability(i)
+    self:ValidateFoldingAvailability(i - 1)
 
-    self:FixFolding(i)
+    self:FixIndeces()
 end
 
 function DataContext:EntryForReal(line)
@@ -1753,11 +2003,6 @@ local function tableSame(a, b)
     return true 
 end
 
-local function swap(a, b)
-    local save = (type(a) == "table" and table.Copy(a) or a)
-    return b, save 
-end
-
 AccessorFunc(self, "tabSize", "TabSize", FORCE_NUMBER)
 AccessorFunc(self, "colors", "Colors")
 
@@ -2083,7 +2328,7 @@ function self:InitBackgroundWorker() -- Initializes the background thread, this 
                 })
             end
 
-            if self.bgLineCounter % 100 == 0 then 
+            if self.bgLineCounter % 50 == 0 then 
                 coroutine.wait(0.05)
             end 
         end
@@ -2099,6 +2344,8 @@ function self:ContinueBackgroundWorker()
         self:InitBackgroundWorker()
         return 
     end
+
+    if coroutine.status(self.backgroundWorker) == "running" then return end 
 
     if coroutine.status(self.backgroundWorker) == "suspended" or (self.backgroundWorker ~= nil and coroutine.status(self.backgroundWorker) ~= "running") then 
         coroutine.resume(self.backgroundWorker)
@@ -2251,11 +2498,28 @@ function self:TextChanged()
     self.pressedWord = nil 
     self:UpdateSurroudingPairs()
     self:ResetSelection()
-   -- self:ResetBGProg()
 end 
+
+function self:RemoveSelection()
+    if self:IsSelecting() == true then
+        local sc, sl, ec, el =self.data:RemoveTextArea(self.selection.start.char, self.selection.start.line, self.selection.ending.char, self.selection.ending.line)
+        if sc and sl then 
+            self:SetCaret(sc, sl)
+        end 
+    end 
+end
+
+function self:InsertText(text, char, line)
+    char = char or self.caret.char 
+    line = line or self.caret.actualLine
+    char, line = self.data:InsertTextAt(text, char, line)
+    if char then self:SetCaret(char, line) end
+end
 
 function self:_TextChanged() 
     local new = self.entry:GetText()
+
+    self:RemoveSelection()
 
     self.data:UnfoldLine(self.caret.actualLine)
     self.caret.actualLine = self.caret.actualLine + self.data:UnfoldLine(self.caret.actualLine - 1)
@@ -2271,7 +2535,7 @@ function self:_TextChanged()
             self.data:OverrideLine(self.caret.actualLine, insertChar(line.text, new, self.caret.char))
             self:SetCaret(self.caret.char + 1, self.caret.line)
         else 
-
+            self:InsertText(new)
         end
     end
 
@@ -2335,7 +2599,7 @@ function self:_KeyCodePressed(code)
     if self:IsCtrl() then
         if code == KEY_C then 
             if self:IsSelecting() == true then
-                local copy = self:GetTextArea(self.selection.start, self.selection.ending)
+                local copy = self.data:GetTextArea(self.selection.start, self.selection.ending)
                 if copy then  
                     SetClipboardText(copy)
                 end 
@@ -2344,7 +2608,7 @@ function self:_KeyCodePressed(code)
             self.data:FoldAll()
         elseif code == KEY_J then 
             self.data:UnfoldAll()
-        end
+        end 
 
         return
     end
@@ -2362,13 +2626,13 @@ function self:_KeyCodePressed(code)
         self:SetCaret(self.caret.char - 1, self.caret.line, true)
         handleSelection()
     elseif code == KEY_ENTER then 
-        if self.data:UnfoldLine(self.caret.actualLine) > 0 then 
+       if self.data:UnfoldLine(self.caret.actualLine) > 0 then 
             self.data:ValidateFoldingAvailability(self.caret.actualLine) 
         end 
 
         if self.caret.char ~= #line.text and self.data:UnfoldLine(self.caret.actualLine - 1) > 0 then 
             self.data:ValidateFoldingAvailability(self.caret.actualLine - 1) 
-        end 
+        end
 
         self.data:OverrideLine(self.caret.actualLine, left)
         self.data:InsertLine(self.caret.actualLine + 1, right)
@@ -2378,52 +2642,56 @@ function self:_KeyCodePressed(code)
         self:TextChanged()
     elseif line then 
         if code == KEY_BACKSPACE then 
-            if self.caret.char - 1 < 0 then -- Remove line 
-                self.data:UnfoldLine(self.caret.actualLine)
-                self.data:UnfoldLine(self.caret.actualLine - 1)
-
-                local newLine = self.data.context[self.caret.actualLine - 1]
-
-                if not newLine then return end 
-
-                self.data:OverrideLine(self.caret.actualLine - 1, newLine.text .. right)
-
-                self:SetCaret(#newLine.text, self.caret.line - 1)
-
-                self.data:RemoveLine(self.caret.actualLine + 1)
-
-                self.data:ValidateFoldingAvailability(self.caret.actualLine)
-            else -- Normal character remove
-                local save = self.caret.actualLine
-                local unfolds = self.data:UnfoldLine(save)
-
-                local left = getLeftLen(line.text)
-
-                if self.caret.char <= left then 
-                    local save = self.caret.char
-
-                    if self.caret.char % self.tabSize == 0 then 
-                        self.caret.char = self.caret.char - self.tabSize 
-                    else 
-                        self.caret.char = self.caret.char - self.caret.char % self.tabSize 
-                    end
-
-                    local diff = save - self.caret.char 
-
-                    self.data:OverrideLine(self.caret.actualLine, string.rep(" ", left - diff) .. string.gsub(line.text, "^(%s*)", "")) 
-                    self:SetCaret(self.caret.char, self.caret.line, true)
-                else 
+            if self:IsSelecting() == true then
+                self:RemoveSelection()
+            else 
+                if self.caret.char - 1 < 0 then -- Remove line 
+                    self.data:UnfoldLine(self.caret.actualLine)
                     self.data:UnfoldLine(self.caret.actualLine - 1)
 
-                    self.data:OverrideLine(self.caret.actualLine, removeChar(line.text, self.caret.char))
-                    self:SetCaret(self.caret.char - 1, self.caret.line, true)
+                    local newLine = self.data.context[self.caret.actualLine - 1]
 
-                    self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
-                end
+                    if not newLine then return end 
 
-                if unfolds > 0 then 
-                    self.data:ValidateFoldingAvailability(save)
-                end
+                    self.data:OverrideLine(self.caret.actualLine - 1, newLine.text .. right)
+
+                    self:SetCaret(#newLine.text, self.caret.line - 1)
+
+                    self.data:RemoveLine(self.caret.actualLine + 1)
+
+                    self.data:ValidateFoldingAvailability(self.caret.actualLine)
+                else -- Normal character remove
+                    local save = self.caret.actualLine
+                    local unfolds = self.data:UnfoldLine(save)
+
+                    local left = getLeftLen(line.text)
+
+                    if self.caret.char <= left then 
+                        local save = self.caret.char
+
+                        if self.caret.char % self.tabSize == 0 then 
+                            self.caret.char = self.caret.char - self.tabSize 
+                        else 
+                            self.caret.char = self.caret.char - self.caret.char % self.tabSize 
+                        end
+
+                        local diff = save - self.caret.char 
+
+                        self.data:OverrideLine(self.caret.actualLine, string.rep(" ", left - diff) .. string.gsub(line.text, "^(%s*)", "")) 
+                        self:SetCaret(self.caret.char, self.caret.line, true)
+                    else 
+                        self.data:UnfoldLine(self.caret.actualLine - 1)
+
+                        self.data:OverrideLine(self.caret.actualLine, removeChar(line.text, self.caret.char))
+                        self:SetCaret(self.caret.char - 1, self.caret.line, true)
+
+                        self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
+                    end
+
+                    if unfolds > 0 then 
+                        self.data:ValidateFoldingAvailability(save)
+                    end
+                end 
             end 
 
             self:TextChanged()
@@ -2789,6 +3057,7 @@ function self:CaretStoppedMovingHandler()
     if not self.caretMoveTimer then return end  
     if RealTime() > self.caretMoveTimer then 
         self:UpdateSurroudingPairs()
+        self.caretMoveTimer = nil 
     end 
 end
 
@@ -2915,67 +3184,6 @@ function self:SetCaret(...)
     
         return self.caret.line, self.caret.char 
     end
-end
-
-function self:GetTextArea(startChar, startLine, endChar, endLine)
-    if not startChar and not startLine then return end 
-
-    if type(startChar) == "table" and type(startLine) == "table" then 
-        endChar   = startLine.char 
-        endLine   = startLine.line 
-        startLine = startChar.line 
-        startChar = startChar.char 
-    end
-
-    if startLine == endLine then 
-        if startChar > endChar then 
-            startChar, endChar = swap(startChar, endChar)
-        end
-
-        local entry = self.data.context[startLine]
-
-        if not entry then return "" end 
-
-        return string.sub(entry.text, startChar + 1, endChar)
-    elseif startLine > endLine then  
-        startLine, endLine = swap(startLine, endLine)
-        startChar, endChar = swap(startChar, endChar)
-    end
-
-    local result = ""
-
-    local function recursiveAdd(collection)
-        local r = ""
-        for k, v in pairs(collection) do 
-            r = r .. v.text .. "\n"
-            if v.folding and #v.folding.folds > 0 then 
-                r = r .. recursiveAdd(v.folding.folds)
-            end
-        end
-        return r 
-    end 
-
-    for i = startLine, endLine, 1 do 
-        local entry = self.data.context[i]
-
-        if not entry then break end 
-
-        local text = entry.text 
-
-        if i == startLine then 
-            result = result .. string.sub(text, startChar + 1, #text) .. "\n"
-        elseif i == endLine then 
-            result = result .. string.sub(text, 1, endChar) 
-        else 
-            result = result .. text .. "\n"
-        end
-
-        if entry.folding and #entry.folding.folds > 0 then 
-            result = result .. recursiveAdd(entry.folding.folds)
-        end
-    end
-
-    return result 
 end
 
 function self:WordAtPoint(char, line)
@@ -3561,7 +3769,7 @@ function self:HighlightSelectedWords()
     if tableSame(self.selection, self.lastSelection or {}) == false then 
         self:ClearHighlights()
 
-        local selectedText = self:GetTextArea(self.selection.start, self.selection.ending)
+        local selectedText = self.data:GetTextArea(self.selection.start, self.selection.ending)
 
         if selectedText then 
             self.pressedWord = selectedText
@@ -3731,7 +3939,7 @@ local function open()
     end]])
     --    TESTWINDAW.view:SetText(file.Read("expression2/Projects/Mechs/Spidertank/Spidertank_NewAnim/spiderwalker-v1.txt", "DATA"))
 --  TESTWINDAW.view:SetText(file.Read("expression2/libraries/e2parser_v2.txt", "DATA"))
-
+--TESTWINDAW.view:SetText(file.Read("expression2/crashmaster.txt", "DATA"))
 end
 
 concommand.Add("sopen", function( ply, cmd, args )
