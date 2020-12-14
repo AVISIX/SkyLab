@@ -6,8 +6,6 @@
     To Do (Tasks):
         - Indenting
         - Auto Pairing
-        - Pair Highlighting
-        - 
 
     Notes:
         - When closing the editor, save the folds in the sqlite db and save the timestamp. if the file was edited after that specific timestamp, reset the folds to unfolded 
@@ -20,6 +18,9 @@ end
 
 local DataContext = {}
 DataContext.__index = DataContext
+
+DataContext.undo = {}
+DataContext.redo = {}
 
 DataContext.defaultLines = {}
 DataContext.context = {}
@@ -383,8 +384,7 @@ function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
                     end 
                 end
                 return false 
-            end)() == true 
-            or
+            end)() == true  or
             (function() -- Handle Captures 
                 for k, v in pairs(self.profile.captures) do 
                     local match = readPattern(v.begin.pattern)
@@ -459,52 +459,6 @@ function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
     return result
 end
 
-function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine)
-    if not startChar and not startLine then return end 
-
-    if type(startChar) == "table" and type(startLine) == "table" then 
-        endChar   = startLine.char 
-        endLine   = startLine.line 
-        startLine = startChar.line 
-        startChar = startChar.char 
-    end
-
-    if startLine == endLine then 
-        if startChar > endChar then 
-            startChar, endChar = swap(startChar, endChar)
-        end
-
-        local entry = self.context[startLine]
-
-        if not entry then return "" end 
-
-        self:OverrideLine(startLine, string.sub(entry.text, 1, startChar) .. string.sub(entry.text, endChar + 1, #entry.text))
-
-        return startChar, startLine, endChar, endLine
-    elseif startLine > endLine then  
-        startLine, endLine = swap(startLine, endLine)
-        startChar, endChar = swap(startChar, endChar)
-    end
-
-    startLine = math.max(startLine, 1)
-
-    local sl = self.context[startLine]
-    local el = self.context[endLine]
-
-    if not sl or not el then return end 
-
-    sl = sl.text 
-    el = el.text 
-
-    self:OverrideLine(startLine, string.sub(sl, 1, startChar) ..string.sub(el, endChar + 1, #el))
-
-    for i = startLine, endLine - 1, 1 do 
-        self:RemoveLine(startLine + 1)
-    end
-
-    return startChar, startLine, endChar, endLine
-end
-
 function DataContext:GetTextArea(startChar, startLine, endChar, endLine)
     if not startChar and not startLine then return end 
 
@@ -568,7 +522,59 @@ function DataContext:GetTextArea(startChar, startLine, endChar, endLine)
     return result 
 end
 
-function DataContext:InsertTextAt(text, char, line)
+-- Remove Text Area
+function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
+    if not startChar and not startLine then return end 
+
+    if type(startChar) == "table" and type(startLine) == "table" then 
+        endChar   = startLine.char 
+        endLine   = startLine.line 
+        startLine = startChar.line 
+        startChar = startChar.char 
+    end
+
+    if startLine == endLine then 
+        if startChar > endChar then 
+            startChar, endChar = swap(startChar, endChar)
+        end
+
+        local entry = self.context[startLine]
+
+        if not entry then return "" end 
+
+        self:OverrideLine(startLine, string.sub(entry.text, 1, startChar) .. string.sub(entry.text, endChar + 1, #entry.text))
+
+        return startChar, startLine, endChar, endLine
+    elseif startLine > endLine then  
+        startLine, endLine = swap(startLine, endLine)
+        startChar, endChar = swap(startChar, endChar)
+    end
+
+    startLine = math.max(startLine, 1)
+
+    local sl = self.context[startLine]
+    local el = self.context[endLine]
+
+    if not sl or not el then return end 
+
+    sl = sl.text 
+    el = el.text 
+
+    self:OverrideLine(startLine, string.sub(sl, 1, startChar) ..string.sub(el, endChar + 1, #el))
+
+    for i = startLine, endLine - 1, 1 do 
+        self:RemoveLine(startLine + 1)
+    end
+
+    return startChar, startLine, endChar, endLine
+end
+
+function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine)
+    self:_RemoveTextArea(startChar, startLine, endChar, endLine)
+end
+
+-- Insert Text
+function DataContext:_InsertTextAt(text, char, line)
     if not text or not char or not line then return end 
 
     local entry = self.context[line]
@@ -602,6 +608,63 @@ function DataContext:InsertTextAt(text, char, line)
 
     return #lines[#lines], (line + #lines - 1)
 end 
+
+function DataContext:InsertTextAt(text, char, line)
+    self:_InsertTextAt(text, char, line)
+end
+
+-- Insert Line 
+function DataContext:_InsertLine(i, text)
+    i = i or #self.context 
+    i = math.max(i, 1)
+
+    table.insert(self.context, math.min(i, #self.context + 1), self:ConstructContextLine(i, text))
+
+    self:ValidateFoldingAvailability(i)
+    self:ValidateFoldingAvailability(i - 1)
+
+    self:FixIndeces()
+end
+
+function DataContext:InsertLine(i, text)
+    self:_InsertLine(i, text)
+end
+
+-- Remove Line 
+function DataContext:_RemoveLine(i)
+    i = i or #self.context
+    i = math.Clamp(i, 1, #self.context)
+
+    table.remove(self.context, i)
+
+    self:FixIndeces()
+
+    self:ValidateFoldingAvailability(i)
+    self:ValidateFoldingAvailability(i - 1)
+
+    return i 
+end
+
+function DataContext:RemoveLine(i)
+    self:_RemoveLine(i)
+end
+
+-- Change Line 
+function DataContext:_OverrideLine(i, text)
+    if i <= 0 or i > #self.context then return end 
+    if not text then return end 
+
+    self.context[i] = self:ConstructContextLine(i, text)
+
+    self:ValidateFoldingAvailability(i)
+    self:ValidateFoldingAvailability(i - 1)
+
+    self:FixIndeces()
+end
+
+function DataContext:OverrideLine(i, text)
+    self:_OverrideLine(i, text)
+end
 
 function DataContext:CountIndentation(tokens, tokenCallback)
     if not tokens or #tokens == 0 then return end 
@@ -704,68 +767,9 @@ function DataContext:FindMatchDown(tokenIndex, lineIndex)
     return curToken, tokenIndex, lineIndex
 end
 
-local function compareLines(A, B)
-    if not A or not B then return nil end 
-
-    local aL = {}
-    local bL = {}
-
-    do 
-        local aT = type(A)
-        local bT = type(B)
-
-        if aT == "string" then 
-            aL = string.Split(A, "\n")
-        elseif aT == "table" then 
-            aL = A 
-        else return 0, 0 end 
-
-        if bT == "string" then 
-            bL = string.Split(B, "\n")
-        elseif bT == "table" then 
-            bL = B 
-        else return nil end 
-    end 
-
-    -- Remove every common suffix 
-    local eL = 0 
-    if #aL ~= #bL then 
-        eL = (#aL > #bL and #aL or #bL)
-    else 
-        eL = #aL 
-        while eL >= 1 and aL[eL] == bL[eL] do  
-            eL = eL - 1
-        end
-    end
-
-    -- They are the same 
-    if eL == 0 then return {0,0} end
-
-    -- Remove every common prefix 
-    local sL = 1
-    while aL[sL] == bL[sL] and sL < eL do  
-        sL = sL + 1
-    end
-
-    -- Returns the Start and End of area where lines werent the same 
-    return {sL, eL}
-end
-
--- Call this function to save the current context
 function DataContext:Record() 
-    self.record = self:GetLines()
+
 end 
-
--- Call this function to compare the saved context with the current context
-function DataContext:Compare()
-    if not self.record then return end 
-
-    local startLine, endLine = compareLines(self.record, self:GetLines())
-
-    print(startLine .. " " .. endLine)
-
-    self.record = nil 
-end
 
 function DataContext:Undo()
 
@@ -1037,6 +1041,9 @@ end
 function DataContext:SetContext(text)
     if not text then return end 
 
+    self.undo = {}
+    self.redo = {}
+
     rules = rules or ""
 
     local lines = {}
@@ -1229,47 +1236,9 @@ function DataContext:FixFolding(i)
         if self.context[i].folding then  
             if self:ValidateFoldingAvailability(i) == true then break end 
         end 
-        
+
         i = i - 1
     end
-end
-
-function DataContext:InsertLine(i, text)
-    i = i or #self.context 
-    i = math.max(i, 1)
-
-    table.insert(self.context, math.min(i, #self.context + 1), self:ConstructContextLine(i, text))
-
-    self:ValidateFoldingAvailability(i)
-    self:ValidateFoldingAvailability(i - 1)
-
-    self:FixIndeces()
-end
-
-function DataContext:RemoveLine(i)
-    i = i or #self.context
-    i = math.Clamp(i, 1, #self.context)
-
-    table.remove(self.context, i)
-
-    self:FixIndeces()
-
-    self:ValidateFoldingAvailability(i)
-    self:ValidateFoldingAvailability(i - 1)
-
-    return i 
-end
-
-function DataContext:OverrideLine(i, text)
-    if i <= 0 or i > #self.context then return end 
-    if not text then return end 
-
-    self.context[i] = self:ConstructContextLine(i, text)
-
-    self:ValidateFoldingAvailability(i)
-    self:ValidateFoldingAvailability(i - 1)
-
-    self:FixIndeces()
 end
 
 function DataContext:EntryForReal(line)
@@ -2159,8 +2128,6 @@ function self:Init()
         b.DoClick = function(_)
             local super = b.super 
 
-            self:ResetSelection()
-
             if not super then 
                 self:HideButtons()
                 return 
@@ -2172,6 +2139,14 @@ function self:Init()
 
             if #super.folding.folds == 0 then  
                 local l = self.data.context[line]
+
+                if self:IsShift() == true then 
+                    local max = line + l.folding.available
+                    self:SetSelection(0, line + 1, #self.data.context[max].text, max)
+                    return 
+                else 
+                    self:ResetSelection()
+                end
 
                 if not l or not l.folding then
                     self:HideButtons()
@@ -2193,7 +2168,8 @@ function self:Init()
                 end
 
                 b:SetFolded(true)
-            else 
+            else             
+                self:ResetSelection()
                 self.data:UnfoldLine(line)
                 self:HideButtons()
                 b:SetFolded(false)
@@ -2502,7 +2478,7 @@ end
 
 function self:RemoveSelection()
     if self:IsSelecting() == true then
-        local sc, sl, ec, el =self.data:RemoveTextArea(self.selection.start.char, self.selection.start.line, self.selection.ending.char, self.selection.ending.line)
+        local sc, sl, ec, el = self.data:RemoveTextArea(self.selection.start.char, self.selection.start.line, self.selection.ending.char, self.selection.ending.line)
         if sc and sl then 
             self:SetCaret(sc, sl)
         end 
@@ -2608,7 +2584,10 @@ function self:_KeyCodePressed(code)
             self.data:FoldAll()
         elseif code == KEY_J then 
             self.data:UnfoldAll()
-        end 
+        elseif code == KEY_A then 
+            local c = self.data.context 
+            self:SetSelection(0,1,#c[#c].text, #c) 
+        end
 
         return
     end
