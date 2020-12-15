@@ -95,7 +95,7 @@ function DataContext:LineConstructionStarted() end
 
 function DataContext:FoldingAvailbilityCheckStarted() end 
 function DataContext:FoldingAvailbilityCheckCompleted() end 
-function DataContext:FoldingAvailbilityFound(a, b) end
+function DataContext:FoldingAvailbilityFound(a, b) end 
 
 function DataContext:LineFolded() end 
 function DataContext:LineUnfolded() end 
@@ -542,7 +542,7 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
 
         if not entry then return "" end 
 
-        self:OverrideLine(startLine, string.sub(entry.text, 1, startChar) .. string.sub(entry.text, endChar + 1, #entry.text))
+        self:_OverrideLine(startLine, string.sub(entry.text, 1, startChar) .. string.sub(entry.text, endChar + 1, #entry.text))
 
         return startChar, startLine, endChar, endLine
     elseif startLine > endLine then  
@@ -560,17 +560,17 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
     sl = sl.text 
     el = el.text 
 
-    self:OverrideLine(startLine, string.sub(sl, 1, startChar) ..string.sub(el, endChar + 1, #el))
+    self:_OverrideLine(startLine, string.sub(sl, 1, startChar) ..string.sub(el, endChar + 1, #el))
 
     for i = startLine, endLine - 1, 1 do 
-        self:RemoveLine(startLine + 1)
+        self:_RemoveLine(startLine + 1)
     end
 
     return startChar, startLine, endChar, endLine
 end
 
 function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine)
-    self:_RemoveTextArea(startChar, startLine, endChar, endLine)
+    return self:_RemoveTextArea(startChar, startLine, endChar, endLine)
 end
 
 -- Insert Text
@@ -588,7 +588,7 @@ function DataContext:_InsertTextAt(text, char, line)
         
         local left = string.sub(entry.text, 1, char) .. text
 
-        self:OverrideLine(line, left .. string.sub(entry.text, char + 1, #entry.text))
+        self:_OverrideLine(line, left .. string.sub(entry.text, char + 1, #entry.text))
 
         return #left, line
     end
@@ -596,13 +596,13 @@ function DataContext:_InsertTextAt(text, char, line)
     local left  = string.sub(entry.text, 1, char)
     local right = string.sub(entry.text, char + 1, #entry.text)
 
-    self:OverrideLine(line, left .. lines[1])
+    self:_OverrideLine(line, left .. lines[1])
 
     for i = #lines, 2, -1 do 
         if i == #lines then 
-            self:InsertLine(line + 1, lines[i] .. right)
+            self:_InsertLine(line + 1, lines[i] .. right)
         else 
-            self:InsertLine(line + 1, lines[i])
+            self:_InsertLine(line + 1, lines[i])
         end
     end
 
@@ -610,7 +610,7 @@ function DataContext:_InsertTextAt(text, char, line)
 end 
 
 function DataContext:InsertTextAt(text, char, line)
-    self:_InsertTextAt(text, char, line)
+    return self:_InsertTextAt(text, char, line)
 end
 
 -- Insert Line 
@@ -627,7 +627,10 @@ function DataContext:_InsertLine(i, text)
 end
 
 function DataContext:InsertLine(i, text)
-    self:_InsertLine(i, text)
+    i = i - 1
+    local line = self.context[i]
+    if not line or not line.text then return end 
+    self:InsertTextAt("\n" .. text, #line.text, i)
 end
 
 -- Remove Line 
@@ -646,7 +649,25 @@ function DataContext:_RemoveLine(i)
 end
 
 function DataContext:RemoveLine(i)
-    self:_RemoveLine(i)
+    local endChar, endLine
+    do 
+        local cur = self.context[i]
+        if cur and cur.text then 
+            endChar, endLine = (#cur.text), i 
+        else return end 
+    end
+
+    local startChar, startLine 
+    do 
+        local prev = self.context[i - 1]
+        if prev and prev.text then 
+            startChar, startLine = (#prev.text), (i - 1) 
+        else 
+            startChar, startLine = 0, i 
+        end
+    end 
+
+    self:_RemoveTextArea(startChar, startLine, endChar, endLine)
 end
 
 -- Change Line 
@@ -1324,6 +1345,10 @@ local function isNumber(char)
     if not char or char == "" then return false end 
     local n = string.byte(char)
     return n >= 48 and n <= 57 
+end
+
+local function isLetter(char)
+    return isUpper(char) == true or isLower(char) == true or isNumber(char) == true
 end
 
 local function isSpecial(char)
@@ -2533,6 +2558,50 @@ end
 function self:OnKeyCombo(key1, key2)
 
 end
+
+function self:JumpTextRight(char, line)
+    local entry = self.data.context[line]
+    if not entry then return end  
+
+    char = char + 1
+
+    local curChar = entry.text[char]
+
+    local function skipWhitespaces()
+        while string.gsub(curChar, "%s", "") == "" do
+            local temp = entry.text[char] 
+            if not temp or temp == "" then 
+                line = line + 1
+                char = 1 
+                entry = self.data.context[line]
+                if not entry then return end 
+                temp = entry.text[char] 
+            else 
+                char = char + 1
+            end 
+            curChar = temp
+        end
+    end
+
+    skipWhitespaces()
+
+    if isSpecial(curChar) == true then 
+        while isSpecial(curChar) == true and string.gsub(curChar, "%s", "") ~= "" do
+            char = char + 1  
+            curChar = entry.text[char]  
+        end 
+    else 
+        while isLetter(curChar) == true and string.gsub(curChar, "%s", "") ~= "" do
+            char = char + 1  
+            curChar = entry.text[char]  
+        end 
+    end 
+
+    char = char - 1
+
+    return char, line 
+end
+
 function self:_KeyCodePressed(code)
     self.lastCode = code 
 
@@ -2587,6 +2656,18 @@ function self:_KeyCodePressed(code)
         elseif code == KEY_A then 
             local c = self.data.context 
             self:SetSelection(0,1,#c[#c].text, #c) 
+        elseif code == KEY_DOWN then 
+            self.textPos:Set(1)
+        elseif code == KEY_UP then 
+            self.textPos:Set(-1)
+        elseif code == KEY_RIGHT then 
+            local char, line = self:JumpTextRight(self.caret.char, self.caret.line)
+            if char and line then 
+                self:SetCaret(char, line)
+            end
+        elseif code == KEY_LEFT then 
+            local prevChar = line.text[self.caret.char]
+            
         end
 
         return
