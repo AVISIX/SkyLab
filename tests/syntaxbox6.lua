@@ -522,6 +522,20 @@ function DataContext:GetTextArea(startChar, startLine, endChar, endLine)
     return result 
 end
 
+function DataContext:SaveUndo(type, ...)
+    if not type then return end 
+
+    if type == "remove" then 
+        table.insert(self.undo, {
+
+        })
+    elseif type == "add" then 
+
+    elseif type == "edit" then 
+
+    end
+end
+
 -- Remove Text Area
 function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
     if not startChar and not startLine then return end 
@@ -538,9 +552,11 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
             startChar, endChar = swap(startChar, endChar)
         end
 
+        local removed = self:GetTextArea(startChar, startLine, endChar, endLine)
+
         local entry = self.context[startLine]
 
-        if not entry then return "" end 
+        if not entry then return startChar, startLine, endChar, endLine end 
 
         self:_OverrideLine(startLine, string.sub(entry.text, 1, startChar) .. string.sub(entry.text, endChar + 1, #entry.text))
 
@@ -551,6 +567,8 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
     end
 
     startLine = math.max(startLine, 1)
+
+    local removed = self:GetTextArea(startChar, startLine, endChar, endLine)
 
     local sl = self.context[startLine]
     local el = self.context[endLine]
@@ -788,15 +806,13 @@ function DataContext:FindMatchDown(tokenIndex, lineIndex)
     return curToken, tokenIndex, lineIndex
 end
 
-function DataContext:Record() 
-
-end 
-
 function DataContext:Undo()
+    if #self.undo == 0 then return end
 
 end
 
 function DataContext:Redo()
+    if #self.redo == 0 then return end
 
 end
 
@@ -2503,10 +2519,7 @@ end
 
 function self:RemoveSelection()
     if self:IsSelecting() == true then
-        local sc, sl, ec, el = self.data:RemoveTextArea(self.selection.start.char, self.selection.start.line, self.selection.ending.char, self.selection.ending.line)
-        if sc and sl then 
-            self:SetCaret(sc, sl)
-        end 
+        self:RemoveText(self.selection.start, self.selection.ending)
     end 
 end
 
@@ -2517,7 +2530,14 @@ function self:InsertText(text, char, line)
     if char then self:SetCaret(char, line) end
 end
 
-function self:_TextChanged() 
+function self:RemoveText(a,b,c,d)
+    local sc, sl, ec, el = self.data:RemoveTextArea(a, b, c, d)
+    if sc and sl then 
+        self:SetCaret(sc, sl)
+    end 
+end
+
+function self:_TextChanged()
     local new = self.entry:GetText()
 
     self:RemoveSelection()
@@ -2532,12 +2552,7 @@ function self:_TextChanged()
         
         if not line then return end  
 
-        if #new == 1 then 
-            self.data:OverrideLine(self.caret.actualLine, insertChar(line.text, new, self.caret.char))
-            self:SetCaret(self.caret.char + 1, self.caret.line)
-        else 
-            self:InsertText(new)
-        end
+        self:InsertText(new)
     end
 
     foo()
@@ -2559,7 +2574,46 @@ function self:OnKeyCombo(key1, key2)
 
 end
 
-function self:JumpTextRight(char, line)
+function self:HopTextLeft(char, line)
+    local entry = self.data.context[line]
+    if not entry then return end  
+
+    local curChar = entry.text[char]
+
+    local function skipWhitespaces()
+        while string.gsub(curChar, "%s", "") == "" do
+            local temp = entry.text[char] 
+            if not temp or temp == "" then 
+                line = line - 1
+                entry = self.data.context[line]
+                if not entry or not entry.text then return end 
+                char = #entry.text 
+                temp = entry.text[char] 
+            else 
+                char = char - 1
+            end
+            curChar = entry.text[char] 
+        end
+    end
+
+    skipWhitespaces()
+
+    if isSpecial(curChar) == true then 
+        while isSpecial(curChar) == true and string.gsub(curChar, "%s", "") ~= "" do
+            char = char - 1  
+            curChar = entry.text[char]  
+        end 
+    else 
+        while isLetter(curChar) == true and string.gsub(curChar, "%s", "") ~= "" do
+            char = char - 1  
+            curChar = entry.text[char]  
+        end 
+    end 
+
+    return char, line 
+end
+
+function self:HopTextRight(char, line)
     local entry = self.data.context[line]
     if not entry then return end  
 
@@ -2661,13 +2715,15 @@ function self:_KeyCodePressed(code)
         elseif code == KEY_UP then 
             self.textPos:Set(-1)
         elseif code == KEY_RIGHT then 
-            local char, line = self:JumpTextRight(self.caret.char, self.caret.line)
+            local char, line = self:HopTextRight(self.caret.char, self.caret.actualLine)
             if char and line then 
                 self:SetCaret(char, line)
             end
         elseif code == KEY_LEFT then 
-            local prevChar = line.text[self.caret.char]
-            
+            local char, line = self:HopTextLeft(self.caret.char, self.caret.actualLine)
+            if char and line then 
+                self:SetCaret(char, line)
+            end
         end
 
         return
@@ -2742,9 +2798,8 @@ function self:_KeyCodePressed(code)
                     else 
                         self.data:UnfoldLine(self.caret.actualLine - 1)
 
-                        self.data:OverrideLine(self.caret.actualLine, removeChar(line.text, self.caret.char))
-                        self:SetCaret(self.caret.char - 1, self.caret.line, true)
-
+                        self:RemoveText(self.caret.char - 1, self.caret.actualLine, self.caret.char, self.caret.actualLine)
+                        
                         self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
                     end
 
