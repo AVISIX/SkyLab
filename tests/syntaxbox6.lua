@@ -522,20 +522,6 @@ function DataContext:GetTextArea(startChar, startLine, endChar, endLine)
     return result 
 end
 
-function DataContext:SaveUndo(type, ...)
-    if not type then return end 
-
-    if type == "remove" then 
-        table.insert(self.undo, {
-
-        })
-    elseif type == "add" then 
-
-    elseif type == "edit" then 
-
-    end
-end
-
 -- Remove Text Area
 function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
     if not startChar and not startLine then return end 
@@ -702,6 +688,16 @@ function DataContext:_OverrideLine(i, text)
 end
 
 function DataContext:OverrideLine(i, text)
+    local oldText = self.context[i]
+
+    if not oldText then return end 
+
+    table.insert(self.undo, {
+        f = DataContext._OverrideLine,
+        a1 = i,
+        a2 = oldText
+    })
+
     self:_OverrideLine(i, text)
 end
 
@@ -2717,11 +2713,13 @@ function self:_KeyCodePressed(code)
         elseif code == KEY_RIGHT then 
             local char, line = self:HopTextRight(self.caret.char, self.caret.actualLine)
             if char and line then 
+                self:ResetSelection()
                 self:SetCaret(char, line)
             end
         elseif code == KEY_LEFT then 
             local char, line = self:HopTextLeft(self.caret.char, self.caret.actualLine)
             if char and line then 
+                self:ResetSelection()
                 self:SetCaret(char, line)
             end
         end
