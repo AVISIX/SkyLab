@@ -3663,7 +3663,7 @@ function self:PaintCaret(x, w, i, c, index)
             end
         end  
     else 
-        self.data:TrimRight(i)
+     --   self.data:TrimRight(i) maybe someday ill add this back (removed cause it will fuck with  undo & redo)
     end
 end 
 
