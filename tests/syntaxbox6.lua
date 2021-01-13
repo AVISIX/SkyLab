@@ -520,17 +520,44 @@ function DataContext:GetTextArea(startChar, startLine, endChar, endLine)
     end
 
     return result 
-end
+end 
 
 -- Remove Text Area
-function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
+function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_undo)
     if not startChar and not startLine then return end 
 
+    local text = endChar
+    
     if type(startChar) == "table" and type(startLine) == "table" then 
         endChar   = startLine.char 
         endLine   = startLine.line 
         startLine = startChar.line 
         startChar = startChar.char 
+    elseif type(endChar) == "string" then 
+        local lines = string.Split(endChar, "\n")
+        endChar = #lines[#lines] 
+        endLine = startLine + #lines - 1
+    end
+
+    if type(endLine) == "boolean" then 
+        do_undo = endLine 
+    else
+        if do_undo == nil then do_undo = true end 
+    end
+
+    local function storeUndo()
+        if do_undo == true then 
+            if type(endChar) ~= "string" then 
+                text = self:GetTextArea(startChar, startLine, endChar, endLine)
+            end
+
+            table.insert(self.undo, {
+                t = "insert",
+                text = text,
+                char = startChar,
+                line = startLine
+            })
+        end    
     end
 
     if startLine == endLine then 
@@ -538,11 +565,11 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
             startChar, endChar = swap(startChar, endChar)
         end
 
-        local removed = self:GetTextArea(startChar, startLine, endChar, endLine)
-
         local entry = self.context[startLine]
 
         if not entry then return startChar, startLine, endChar, endLine end 
+
+        storeUndo()
 
         self:_OverrideLine(startLine, string.sub(entry.text, 1, startChar) .. string.sub(entry.text, endChar + 1, #entry.text))
 
@@ -554,12 +581,12 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
 
     startLine = math.max(startLine, 1)
 
-    local removed = self:GetTextArea(startChar, startLine, endChar, endLine)
-
     local sl = self.context[startLine]
     local el = self.context[endLine]
 
     if not sl or not el then return end 
+
+    storeUndo()
 
     sl = sl.text 
     el = el.text 
@@ -573,17 +600,38 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine)
     return startChar, startLine, endChar, endLine
 end
 
-function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine)
-    return self:_RemoveTextArea(startChar, startLine, endChar, endLine)
+function DataContext:RemoveText(startChar, startLine, text, do_undo)
+    return self:_RemoveTextArea(startChar, startLine, text, do_undo)
+end
+
+function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine, do_undo)
+    return self:_RemoveTextArea(startChar, startLine, endChar, endLine, do_undo)
 end
 
 -- Insert Text
-function DataContext:_InsertTextAt(text, char, line)
+function DataContext:_InsertTextAt(text, char, line, do_undo)
     if not text or not char or not line then return end 
 
     local entry = self.context[line]
         
     if not entry then return end 
+
+    if do_undo == nil then do_undo = true end 
+
+    if do_undo == true then 
+        table.insert(self.undo, {
+            t = "remove",
+            text = text,
+            char = char,
+            line = line
+        })
+
+        print(#self.undo)
+        PrintTable(self.undo[#self.undo])
+
+        --PrintTable(self.undo)
+        --debug.Trace()
+    end
 
     local lines = string.Split(text, "\n")
 
@@ -613,8 +661,8 @@ function DataContext:_InsertTextAt(text, char, line)
     return #lines[#lines], (line + #lines - 1)
 end 
 
-function DataContext:InsertTextAt(text, char, line)
-    return self:_InsertTextAt(text, char, line)
+function DataContext:InsertTextAt(text, char, line, do_undo)
+    return self:_InsertTextAt(text, char, line, do_undo)
 end
 
 -- Insert Line 
@@ -691,12 +739,6 @@ function DataContext:OverrideLine(i, text)
     local oldText = self.context[i]
 
     if not oldText then return end 
-
-    table.insert(self.undo, {
-        f = DataContext._OverrideLine,
-        a1 = i,
-        a2 = oldText
-    })
 
     self:_OverrideLine(i, text)
 end
@@ -805,11 +847,57 @@ end
 function DataContext:Undo()
     if #self.undo == 0 then return end
 
+    self.redo = {}
+
+    local r1, r2 
+
+    local entry = table.Copy(self.undo[#self.undo])
+
+    if entry.t == "insert" then 
+        r1, r2 = self:_InsertTextAt(entry.text, entry.char, entry.line, false)
+        local cp = table.Copy(entry)
+        cp.t = "remove"
+        table.insert(self.redo, cp)
+    elseif entry.t == "remove" then 
+        r1, r2 = self:_RemoveTextArea(entry.char, entry.line, entry.text, false)
+        local cp = table.Copy(entry)
+        cp.t = "insert"
+        table.insert(self.redo, cp)
+    else 
+        error("Unknown Undo Type (What the fuck?)")
+    end
+
+    self.undo[#self.undo] = nil 
+
+    PrintTable(self.undo)
+
+    return r1, r2 
 end
 
 function DataContext:Redo()
     if #self.redo == 0 then return end
 
+    local r1, r2 
+
+    local entry = self.redo[#self.redo]
+
+    if entry.t == "insert" then 
+        r1, r2 = self:_InsertTextAt(entry.text, entry.char, entry.line, false)
+        local cp = table.Copy(entry)
+        cp.t = "remove"
+        table.insert(self.undo, cp)
+    elseif entry.t == "remove" then 
+        r1, r2 = self:_RemoveTextArea(entry.char, entry.line, entry.text, false)
+        local cp = table.Copy(entry)
+        cp.t = "insert"
+        table.insert(self.undo, cp)
+    else 
+        error("Unknown Redo Type (What the fuck? v2)")
+    end
+
+    table.remove(self.redo)
+
+    return r1, r2 
 end
 
 local function getLeftLen(str)
@@ -2536,6 +2624,8 @@ end
 function self:_TextChanged()
     local new = self.entry:GetText()
 
+    if new == "" then return end 
+
     self:RemoveSelection()
 
     self.data:UnfoldLine(self.caret.actualLine)
@@ -2721,6 +2811,17 @@ function self:_KeyCodePressed(code)
             if char and line then 
                 self:ResetSelection()
                 self:SetCaret(char, line)
+            end
+        elseif code == KEY_Z then 
+            local char, line = self.data:Undo()
+            if char and line then 
+               -- print(char .. "  " .. line)
+              --  self:SetCaret(char, line)
+            end
+        elseif code == KEY_Y then 
+            local char, line = self.data:Redo()
+            if char and line then 
+              --  self:SetCaret(char, line)
             end
         end
 
