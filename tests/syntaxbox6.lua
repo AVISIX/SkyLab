@@ -528,6 +528,12 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_
 
     local text = endChar
     
+    if type(endLine) == "boolean" then 
+        do_undo = endLine 
+    else
+        if do_undo == nil then do_undo = true end 
+    end
+
     if type(startChar) == "table" and type(startLine) == "table" then 
         endChar   = startLine.char 
         endLine   = startLine.line 
@@ -535,18 +541,20 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_
         startChar = startChar.char 
     elseif type(endChar) == "string" then 
         local lines = string.Split(endChar, "\n")
-        endChar = #lines[#lines] 
-        endLine = startLine + #lines - 1
-    end
 
-    if type(endLine) == "boolean" then 
-        do_undo = endLine 
-    else
-        if do_undo == nil then do_undo = true end 
+        endLine = startLine + #lines - 1
+
+        if startLine == endLine then 
+            endChar = startChar + #lines[#lines]
+        else 
+            endChar = #lines[#lines]
+        end
     end
 
     local function storeUndo()
         if do_undo == true then 
+            self.redo = {}
+
             if type(endChar) ~= "string" then 
                 text = self:GetTextArea(startChar, startLine, endChar, endLine)
             end
@@ -571,7 +579,10 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_
 
         storeUndo()
 
-        self:_OverrideLine(startLine, string.sub(entry.text, 1, startChar) .. string.sub(entry.text, endChar + 1, #entry.text))
+        local partA = string.sub(entry.text, 1, startChar)
+        local partB = string.sub(entry.text, endChar + 1, #entry.text)
+
+        self:_OverrideLine(startLine, partA .. partB)
 
         return startChar, startLine, endChar, endLine
     elseif startLine > endLine then  
@@ -619,18 +630,13 @@ function DataContext:_InsertTextAt(text, char, line, do_undo)
     if do_undo == nil then do_undo = true end 
 
     if do_undo == true then 
+        self.redo = {}
         table.insert(self.undo, {
             t = "remove",
             text = text,
             char = char,
             line = line
         })
-
-        print(#self.undo)
-        PrintTable(self.undo[#self.undo])
-
-        --PrintTable(self.undo)
-        --debug.Trace()
     end
 
     local lines = string.Split(text, "\n")
@@ -847,29 +853,29 @@ end
 function DataContext:Undo()
     if #self.undo == 0 then return end
 
-    self.redo = {}
-
     local r1, r2 
 
     local entry = table.Copy(self.undo[#self.undo])
 
     if entry.t == "insert" then 
         r1, r2 = self:_InsertTextAt(entry.text, entry.char, entry.line, false)
+
         local cp = table.Copy(entry)
         cp.t = "remove"
+
         table.insert(self.redo, cp)
     elseif entry.t == "remove" then 
         r1, r2 = self:_RemoveTextArea(entry.char, entry.line, entry.text, false)
+
         local cp = table.Copy(entry)
         cp.t = "insert"
+
         table.insert(self.redo, cp)
     else 
         error("Unknown Undo Type (What the fuck?)")
-    end
-
-    self.undo[#self.undo] = nil 
-
-    PrintTable(self.undo)
+    end 
+    
+    table.remove(self.undo)
 
     return r1, r2 
 end
@@ -883,13 +889,17 @@ function DataContext:Redo()
 
     if entry.t == "insert" then 
         r1, r2 = self:_InsertTextAt(entry.text, entry.char, entry.line, false)
+
         local cp = table.Copy(entry)
         cp.t = "remove"
+
         table.insert(self.undo, cp)
     elseif entry.t == "remove" then 
         r1, r2 = self:_RemoveTextArea(entry.char, entry.line, entry.text, false)
+
         local cp = table.Copy(entry)
         cp.t = "insert"
+
         table.insert(self.undo, cp)
     else 
         error("Unknown Redo Type (What the fuck? v2)")
@@ -2211,6 +2221,7 @@ function self:Init()
         end
 
         if self.caret.actualLine <= line + len then return end
+
         self.caret.actualLine = self.caret.actualLine - len 
     end
 
@@ -2815,13 +2826,12 @@ function self:_KeyCodePressed(code)
         elseif code == KEY_Z then 
             local char, line = self.data:Undo()
             if char and line then 
-               -- print(char .. "  " .. line)
-              --  self:SetCaret(char, line)
+                self:SetCaret(char, line)
             end
         elseif code == KEY_Y then 
             local char, line = self.data:Redo()
             if char and line then 
-              --  self:SetCaret(char, line)
+                self:SetCaret(char, line)
             end
         end
 
@@ -2849,10 +2859,9 @@ function self:_KeyCodePressed(code)
             self.data:ValidateFoldingAvailability(self.caret.actualLine - 1) 
         end
 
-        self.data:OverrideLine(self.caret.actualLine, left)
-        self.data:InsertLine(self.caret.actualLine + 1, right)
+        local a, b = self.data:InsertTextAt("\n", self.caret.char, self.caret.actualLine)
 
-        self:SetCaret(0, self.caret.line + 1)
+        if a and b then self:SetCaret(a, b) end
 
         self:TextChanged()
     elseif line then 
@@ -2864,15 +2873,12 @@ function self:_KeyCodePressed(code)
                     self.data:UnfoldLine(self.caret.actualLine)
                     self.data:UnfoldLine(self.caret.actualLine - 1)
 
-                    local newLine = self.data.context[self.caret.actualLine - 1]
+                    local prevLine = self.data.context[self.caret.actualLine - 1]
 
-                    if not newLine then return end 
+                    if not prevLine then return end 
 
-                    self.data:OverrideLine(self.caret.actualLine - 1, newLine.text .. right)
-
-                    self:SetCaret(#newLine.text, self.caret.line - 1)
-
-                    self.data:RemoveLine(self.caret.actualLine + 1)
+                    self.data:RemoveTextArea(#prevLine.text, self.caret.actualLine - 1, "\n")
+                    self:SetCaret(#prevLine.text, self.caret.line - 1)
 
                     self.data:ValidateFoldingAvailability(self.caret.actualLine)
                 else -- Normal character remove
@@ -2884,21 +2890,23 @@ function self:_KeyCodePressed(code)
                     if self.caret.char <= left then 
                         local save = self.caret.char
 
-                        if self.caret.char % self.tabSize == 0 then 
-                            self.caret.char = self.caret.char - self.tabSize 
+                        local diffCheck = self.caret.char
+                        if diffCheck % self.tabSize == 0 then 
+                            diffCheck = diffCheck - self.tabSize 
                         else 
-                            self.caret.char = self.caret.char - self.caret.char % self.tabSize 
+                            diffCheck = diffCheck - diffCheck % self.tabSize 
                         end
 
-                        local diff = save - self.caret.char 
-
-                        self.data:OverrideLine(self.caret.actualLine, string.rep(" ", left - diff) .. string.gsub(line.text, "^(%s*)", "")) 
-                        self:SetCaret(self.caret.char, self.caret.line, true)
+                        local diff = save - diffCheck
+                        
+                        local a, b = self.data:RemoveTextArea(self.caret.char - diff, self.caret.actualLine, self.caret.char, self.caret.actualLine)
+                        if a and b then self:SetCaret(a, b) end
                     else 
                         self.data:UnfoldLine(self.caret.actualLine - 1)
 
-                        self:RemoveText(self.caret.char - 1, self.caret.actualLine, self.caret.char, self.caret.actualLine)
-                        
+                        local a, b = self.data:RemoveTextArea(self.caret.char - 1, self.caret.actualLine, self.caret.char, self.caret.actualLine)
+                        if a and b then self:SetCaret(a, b) end
+
                         self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
                     end
 
@@ -2918,21 +2926,21 @@ function self:_KeyCodePressed(code)
             if self.caret.char <= left then 
                 local save = self.caret.char
 
-                if self.caret.char % self.tabSize == 0 then 
-                    self.caret.char = self.caret.char + self.tabSize 
+                local diffCheck = self.caret.char 
+                if diffCheck % self.tabSize == 0 then 
+                    diffCheck = diffCheck + self.tabSize 
                 else 
-                    self.caret.char = self.caret.char - self.caret.char  % self.tabSize + self.tabSize 
+                    diffCheck = diffCheck - diffCheck  % self.tabSize + self.tabSize 
                 end
+                local diff = diffCheck - save        
 
-                local diff = self.caret.char - save        
-
-                self.data:OverrideLine(self.caret.actualLine, string.rep(" ", left + diff) .. string.gsub(line.text, "^(%s*)", ""))
-                self:SetCaret(self.caret.char, self.caret.line)
+                local a, b = self.data:InsertTextAt(string.rep(" ", diff), self.caret.char, self.caret.actualLine)
+                if a and b then self:SetCaret(a, b) end
             else
                 self.data:UnfoldLine(self.caret.actualLine - 1)
-                
-                self.data:OverrideLine(self.caret.actualLine, insertChar(line.text, self:GetTab(), self.caret.char))
-                self:SetCaret(self.caret.char + self.tabSize, self.caret.line)
+
+                local a, b = self.data:InsertTextAt(self:GetTab(), self.caret.char, self.caret.actualLine)
+                if a and b then self:SetCaret(a, b) end
 
                 self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
             end
@@ -4084,8 +4092,8 @@ vgui.Register("SkyLabCodeBox", self, "DPanel")
 local function open()
     if IsValid(TESTWINDAW) == false or IsValid(TESTWINDAW.view) == false then 
         TESTWINDAW = vgui.Create("DFrame")
-        TESTWINDAW:SetPos( ScrW() / 2 - 900 , ScrH() / 2 - 1000 / 2 )
-        TESTWINDAW:SetSize( 900, 1000 )
+        TESTWINDAW:SetPos( ScrW() / 2 - 600 , ScrH() / 2 - 700 / 2 )
+        TESTWINDAW:SetSize( 700, 700 )
         TESTWINDAW:SetTitle( "Derma SyntaxBox V6" )
         TESTWINDAW:SetDraggable( true )
         TESTWINDAW:MakePopup()
