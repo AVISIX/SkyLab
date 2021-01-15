@@ -522,7 +522,54 @@ function DataContext:GetTextArea(startChar, startLine, endChar, endLine)
     return result 
 end 
 
--- Remove Text Area
+-- Insert Text
+function DataContext:_InsertTextAt(text, char, line, do_undo)
+    if not text or not char or not line then return end 
+
+    local entry = self.context[line]
+        
+    if not entry then return end 
+
+    if do_undo == nil then do_undo = true end 
+
+    if do_undo == true then 
+        self.redo = {}
+        table.insert(self.undo, {
+            t = "remove",
+            text = text,
+            char = char,
+            line = line
+        })
+    end
+
+    local lines = string.Split(text, "\n")
+
+    if #lines == 1 then 
+        text = lines[1]
+        
+        local left = string.sub(entry.text, 1, char) .. text
+
+        self:_OverrideLine(line, left .. string.sub(entry.text, char + 1, #entry.text))
+
+        return #left, line
+    end
+
+    local left  = string.sub(entry.text, 1, char)
+    local right = string.sub(entry.text, char + 1, #entry.text)
+
+    self:_OverrideLine(line, left .. lines[1])
+
+    for i = #lines, 2, -1 do 
+        if i == #lines then 
+            self:_InsertLine(line + 1, lines[i] .. right)
+        else 
+            self:_InsertLine(line + 1, lines[i])
+        end
+    end
+
+    return #lines[#lines], (line + #lines - 1)
+end 
+
 function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_undo)
     if not startChar and not startLine then return end 
 
@@ -611,61 +658,17 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_
     return startChar, startLine, endChar, endLine
 end
 
-function DataContext:RemoveText(startChar, startLine, text, do_undo)
-    return self:_RemoveTextArea(startChar, startLine, text, do_undo)
+function DataContext:AddText(text, char, line, do_undo)
+    return self:_InsertTextAt(text, char, line, do_undo)
+end
+
+function DataContext:RemoveText(text, char, line, do_undo)
+    return self:_RemoveTextArea(char, line, text, do_undo)
 end
 
 function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine, do_undo)
     return self:_RemoveTextArea(startChar, startLine, endChar, endLine, do_undo)
 end
-
--- Insert Text
-function DataContext:_InsertTextAt(text, char, line, do_undo)
-    if not text or not char or not line then return end 
-
-    local entry = self.context[line]
-        
-    if not entry then return end 
-
-    if do_undo == nil then do_undo = true end 
-
-    if do_undo == true then 
-        self.redo = {}
-        table.insert(self.undo, {
-            t = "remove",
-            text = text,
-            char = char,
-            line = line
-        })
-    end
-
-    local lines = string.Split(text, "\n")
-
-    if #lines == 1 then 
-        text = lines[1]
-        
-        local left = string.sub(entry.text, 1, char) .. text
-
-        self:_OverrideLine(line, left .. string.sub(entry.text, char + 1, #entry.text))
-
-        return #left, line
-    end
-
-    local left  = string.sub(entry.text, 1, char)
-    local right = string.sub(entry.text, char + 1, #entry.text)
-
-    self:_OverrideLine(line, left .. lines[1])
-
-    for i = #lines, 2, -1 do 
-        if i == #lines then 
-            self:_InsertLine(line + 1, lines[i] .. right)
-        else 
-            self:_InsertLine(line + 1, lines[i])
-        end
-    end
-
-    return #lines[#lines], (line + #lines - 1)
-end 
 
 function DataContext:InsertTextAt(text, char, line, do_undo)
     return self:_InsertTextAt(text, char, line, do_undo)
@@ -874,7 +877,7 @@ function DataContext:Undo()
     else 
         error("Unknown Undo Type (What the fuck?)")
     end 
-    
+
     table.remove(self.undo)
 
     return r1, r2 
@@ -2758,6 +2761,9 @@ function self:_KeyCodePressed(code)
 
     self:ToggleCaret()
     
+    print("L " .. self.caret.line)
+    print("AL " .. self.caret.actualLine)
+
     do 
         local keyA 
 
@@ -2815,13 +2821,13 @@ function self:_KeyCodePressed(code)
             local char, line = self:HopTextRight(self.caret.char, self.caret.actualLine)
             if char and line then 
                 self:ResetSelection()
-                self:SetCaret(char, line)
+                self:SetCaret(char, self:IndexForKey(line))
             end
         elseif code == KEY_LEFT then 
             local char, line = self:HopTextLeft(self.caret.char, self.caret.actualLine)
             if char and line then 
                 self:ResetSelection()
-                self:SetCaret(char, line)
+                self:SetCaret(char, self:IndexForKey(line))
             end
         elseif code == KEY_Z then 
             local char, line = self.data:Undo()
@@ -2851,16 +2857,10 @@ function self:_KeyCodePressed(code)
         self:SetCaret(self.caret.char - 1, self.caret.line, true)
         handleSelection()
     elseif code == KEY_ENTER then 
-       if self.data:UnfoldLine(self.caret.actualLine) > 0 then 
-            self.data:ValidateFoldingAvailability(self.caret.actualLine) 
-        end 
+       if self.data:UnfoldLine(self.caret.actualLine) > 0 then self.data:ValidateFoldingAvailability(self.caret.actualLine) end 
+        if self.caret.char ~= #line.text and self.data:UnfoldLine(self.caret.actualLine - 1) > 0 then self.data:ValidateFoldingAvailability(self.caret.actualLine - 1) end
 
-        if self.caret.char ~= #line.text and self.data:UnfoldLine(self.caret.actualLine - 1) > 0 then 
-            self.data:ValidateFoldingAvailability(self.caret.actualLine - 1) 
-        end
-
-        local a, b = self.data:InsertTextAt("\n", self.caret.char, self.caret.actualLine)
-
+        local a, b = self.data:AddText("\n", self.caret.char, self.caret.actualLine)
         if a and b then self:SetCaret(a, b) end
 
         self:TextChanged()
@@ -2877,8 +2877,8 @@ function self:_KeyCodePressed(code)
 
                     if not prevLine then return end 
 
-                    self.data:RemoveTextArea(#prevLine.text, self.caret.actualLine - 1, "\n")
-                    self:SetCaret(#prevLine.text, self.caret.line - 1)
+                    local a, b = self.data:RemoveText("\n", #prevLine.text, self.caret.actualLine - 1)
+                    if a and b then self:SetCaret(a, b) end
 
                     self.data:ValidateFoldingAvailability(self.caret.actualLine)
                 else -- Normal character remove
@@ -2934,12 +2934,12 @@ function self:_KeyCodePressed(code)
                 end
                 local diff = diffCheck - save        
 
-                local a, b = self.data:InsertTextAt(string.rep(" ", diff), self.caret.char, self.caret.actualLine)
+                local a, b = self.data:AddText(string.rep(" ", diff), self.caret.char, self.caret.actualLine)
                 if a and b then self:SetCaret(a, b) end
             else
                 self.data:UnfoldLine(self.caret.actualLine - 1)
 
-                local a, b = self.data:InsertTextAt(self:GetTab(), self.caret.char, self.caret.actualLine)
+                local a, b = self.data:AddText(self:GetTab(), self.caret.char, self.caret.actualLine)
                 if a and b then self:SetCaret(a, b) end
 
                 self.data:ValidateFoldingAvailability(self.caret.actualLine - 1)
@@ -3349,63 +3349,73 @@ function self:IndexForKey(key)
     return self.data.context[key].index 
 end
 
+function self:SetCaretFromVisLine(...)
+    if #{...} < 2 then return end 
+    
+    local char, line, swapOnReach = select(1, ...), select(2, ...), select(3, ...)
+
+    if not char or not line then return end 
+
+    if swapOnReach == nil then swapOnReach = false end 
+
+    return self:SetCaret(char, self:IndexForKey(line), swapOnReach)
+end
+
 function self:CaretSet(char, line, actualLine) end 
 function self:SetCaret(...)
-    function self:SetCaret(...)
-        if #{...} < 2 then return end 
-    
-        local char, line, swapOnReach = select(1, ...), select(2, ...), select(3, ...)
+    if #{...} < 2 then return end 
 
-        self.lastCaret = table.Copy(self.caret)
-    
-        if self.caret.char ~= char or self.caret.line ~= line then 
-            if swapOnReach == nil then swapOnReach = false end 
-    
-            local actualLine = self:KeyForIndex(line)
-    
-            if not actualLine then 
-                local last = self.caret.actualLine
-                
-                if self.lastCode == KEY_UP or self.lastCode == KEY_LEFT then 
-                    actualLine = last - 1
-                elseif self.lastCode == KEY_DOWN or self.lastCode == KEY_RIGHT then   
-                    actualLine = last + 1
-                else return end  
-    
-                actualLine = math.Clamp(actualLine, 1, #self.data.context)
-    
-                line = self.data.context[actualLine].index
-            end
-    
-            self.caret.line = math.max(line, 1)
-            self.caret.actualLine = actualLine -- We save this to avoid shitty loops all over the place 
-    
-            if swapOnReach == false then 
-                self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
-            else
-                if char > #self.data.context[actualLine].text and self.lastCode == KEY_RIGHT then 
-                    if not self.data.context[actualLine + 1] then return end  
-                    self:SetCaret(0, self.caret.line + 1)
-                elseif char < 0 and (self.lastCode == KEY_LEFT or self.lastCode == KEY_BACKSPACE) then 
-                    self:SetCaret(#((self.data.context[actualLine - 1] or {}).text or ""), self.caret.line - 1)
-                else
-                    self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
-                end
-            end
-    
-            self:ToggleCaret()
-    
-            self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
-    
-            self.data:ValidateFoldingAvailability(self.caret.actualLine) 
-    
-            self:Goto()
-    
-            self:RefreshCaretMoveTimer()
+    local char, line, swapOnReach = select(1, ...), select(2, ...), select(3, ...)
+
+    self.lastCaret = table.Copy(self.caret)
+
+    if self.caret.char ~= char or self.caret.line ~= line then 
+        if swapOnReach == nil then swapOnReach = false end 
+
+        local actualLine = self:KeyForIndex(line)
+
+        if not actualLine then 
+            local last = self.caret.actualLine
+            
+            if self.lastCode == KEY_UP or self.lastCode == KEY_LEFT then 
+                actualLine = last - 1
+            elseif self.lastCode == KEY_DOWN or self.lastCode == KEY_RIGHT then   
+                actualLine = last + 1
+            else return end  
+
+            actualLine = math.Clamp(actualLine, 1, #self.data.context)
+
+            line = self.data.context[actualLine].index
         end
-    
-        return self.caret.line, self.caret.char 
+
+        self.caret.line = math.max(line, 1)
+        self.caret.actualLine = actualLine -- We save this to avoid shitty loops all over the place 
+
+        if swapOnReach == false then 
+            self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
+        else
+            if char > #self.data.context[actualLine].text and self.lastCode == KEY_RIGHT then 
+                if not self.data.context[actualLine + 1] then return end  
+                self:SetCaret(0, self.caret.line + 1)
+            elseif char < 0 and (self.lastCode == KEY_LEFT or self.lastCode == KEY_BACKSPACE) then 
+                self:SetCaret(#((self.data.context[actualLine - 1] or {}).text or ""), self.caret.line - 1)
+            else
+                self.caret.char = math.Clamp(char, 0, #self.data.context[actualLine].text) 
+            end
+        end
+
+        self:ToggleCaret()
+
+        self:CaretSet(self.caret.char, self.caret.line, self.caret.actualLine)
+
+        self.data:ValidateFoldingAvailability(self.caret.actualLine) 
+
+        self:Goto()
+
+        self:RefreshCaretMoveTimer()
     end
+
+    return self.caret.line, self.caret.char 
 end
 
 function self:WordAtPoint(char, line)
