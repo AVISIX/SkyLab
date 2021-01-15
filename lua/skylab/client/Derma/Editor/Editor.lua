@@ -93,7 +93,7 @@ function self:OpenFile(root, fileDir)
     local extension = string.GetExtensionFromFilename(fileName)
 
     local editor = vgui.Create("DSyntaxBox")
-
+    
     local found = false 
     for id, _ in pairs(SSLE.profiles) do 
         local profile = SSLE.GetProfile(id)

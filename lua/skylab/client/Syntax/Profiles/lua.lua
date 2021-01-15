@@ -271,13 +271,9 @@ SSLE.RegisterProfile("Lua", function()
         },
         closingPairs = 
         {
-            thenend = {"then", "end"},
-            doend = {"do", "end"},
-            repeatuntil = {"repeat", "until"},
-            functionend = {"function", "end"},
-            scopes     = {"{", "}"},
-            parenthesis      = {"(", ")"},
-            brackets    = {"[", "]"}
+            scopes     = {open = "{", close = "}"},
+            parenthesis      = {open = "(", close = ")"},
+            brackets    = {open = "[", close = "]"}
         },
         autoPairing =
         {
@@ -395,11 +391,12 @@ SSLE.RegisterProfile("Lua", function()
 
             error             = Color(241,96,96) -- Anything unhandled
         },
+
         matches = {
             numbers = 
             {
                 pattern = "[0-9][0-9.e]*",
-                validation = function(line, buffer, result, tokenIndex, tokens) 
+                validation = function(line, buffer, result, tokenIndex) 
                     local function nextChar(char)
                         return line[buffer + #result] == char  
                     end
@@ -410,7 +407,7 @@ SSLE.RegisterProfile("Lua", function()
             lineComment = 
             {
                 pattern = "%-%-[^\n]*",
-                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex, triggerOther) 
+                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex) 
                     local nextChar = line[buffer + 2] or ""
                     local nextChar2 = line[buffer + 3] or ""
                     return nextChar ~= "[" and nextChar2 ~= "["
@@ -434,8 +431,8 @@ SSLE.RegisterProfile("Lua", function()
             },
             
             variables = {
-                pattern = "[a-zA-Z_]+[a-zA-Z0-9_]*",
-                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex, tot) 
+                pattern = "[a-zA-Z_][a-zA-Z0-9_]*",
+                validation = function(line, buffer, result, tokenIndex, tokens, lineIndex) 
                     local prevChar = line[buffer - 1] or ""
                     local nextChar = line[buffer + #result] or ""
 
@@ -448,56 +445,47 @@ SSLE.RegisterProfile("Lua", function()
 
                     -- Booleans detection
                     if result == "false" or result == "true" then 
-                        tot("bools")
-                        return true  
+                        return "bools"  
                     end
 
                     -- Constants detection
                     if result == "_G" or result == "_VERSION" then 
-                        tot("globals")
-                        return true 
+                        return "globals"
                     end
 
                     -- nil detection
                     if result == "nil" then 
-                        tot("null")
-                        return true 
+                        return "null" 
                     end
 
                     -- Character operator detection
                     if result == "and" or result == "or" or result == "not" then 
-                        tot("wordops")
-                        return true
+                        return "wordops"
                     end
 
                     -- Keywords detection
                     if keywords[result] then 
-                        tot("keywords")
-                        return true 
+                        return "keywords" 
                     end
 
                     -- self detection 
                     if result == "self" then 
-                        tot("funcself")
-                        return true 
+                        return "funcself" 
                     end
 
                     if result == "collectgarbage" and right[1] == "(" then 
-                        tot("garbagecollector")
-                        return true  
+                        return "garbagecollector"  
                     end
 
                     -- STD-Lib detection
                     if nextChar == "." or prevChar == "=" then 
                         if builtinlibs[result] then 
-                            tot("builtinlibs")
-                            return true
+                            return "builtinlibs"
                         end
                     end
 
                     if metamethods[result] then 
-                        tot("metamethods")
-                        return true 
+                        return "metamethods" 
                     end
 
                     -- Function names and Function parameters
@@ -515,11 +503,9 @@ SSLE.RegisterProfile("Lua", function()
                             end
                             if token and token.text == "function" then 
                                 if isParam == true then 
-                                    tot("funcparam")
-                                    return true 
+                                    return "funcparam" 
                                 end
-                                tot("func")
-                                return true 
+                                return "func" 
                             end 
                         end
                     end
@@ -529,23 +515,19 @@ SSLE.RegisterProfile("Lua", function()
                     if prevChar == "." then 
                         local prevToken = tokens[tokenIndex - 1] or {}
                         if prevToken.type == "builtinlibs" and (stdfuncs[prevToken.text] or {})[result] then 
-                            tot("stdfuncs")
-                            return true 
+                            return "stdfuncs" 
                         else 
-                            tot("varprops")
-                            return true 
+                            return "varprops" 
                         end
                     end
 
                     -- STD-Funcs without Lib
                     if builtinfuncs[result] and ((right[1] == "(" or right[1] == '"') or left[#left] == "=") then 
-                        tot("builtinfuncs")
-                        return true 
+                        return "builtinfuncs" 
                     end
 
                     if right[1] == "(" then
-                        tot("customfuncs") 
-                        return true 
+                        return "customfuncs" 
                     end
 
                     return true 

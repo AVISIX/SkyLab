@@ -262,8 +262,8 @@ function self:AddTab(title, view, autoFocus)
 
     local entry = self.tabs[#self.tabs]
 
-    tab.entry  = entry
-    view.entry = entry 
+    tab.tabEntry  = entry
+    view.tabEntry = entry 
 
     tab.OnLeftClick    = function(self, delay) super:ActivateTab(self.index) end
     tab.OnCloseClicked = function(self, delay) super:RemoveTab(self.index)   end 
@@ -276,7 +276,7 @@ function self:AddTab(title, view, autoFocus)
         self:OnMenuConstructed()
 
         menu:AddOption("Close", function()
-            super:RemoveTab(self.entry)
+            super:RemoveTab(self.tabEntry)
         end)
 
         self:OnMenuConstructionFinished()

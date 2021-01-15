@@ -94,7 +94,9 @@ if CLIENT then
     import(l"client/Derma/Elements/DSleekButton.lua")
     import(l"client/Derma/Elements/DSleekTextbox.lua")  
     import(l"client/Derma/Elements/DSleekScrollbar.lua")
-    import(l"client/Derma/Elements/DSyntaxBox.lua")
+
+    import(l"client/Derma/Elements/Entry/Context.lua")
+    import(l"client/Derma/Elements/Entry/SyntaxBox.lua")
 
     import(l"client/Derma/Elements/DSleekFilePreview.lua")
     import(l"client/Derma/Elements/DSleekFileInfo.lua")
