@@ -57,7 +57,7 @@ function self:CreateViews()
         owner = self.maincontainer
 
         self.seperator:SetRight(self.maincontainer)
-        self.seperator:SetLeft(self.sidebar)
+        self.seperator:SetLeft(self.sidebar)    
     end
 
     self.navbar = vgui.Create("DSleekPanel", owner)
@@ -323,6 +323,8 @@ function self:CreateElements()
     -- Main 
     self.tabulator = vgui.Create("DSleekTabulator", self.main)
     self.tabulator:Dock(FILL)
+
+    if IsValid(self.seperator) == false then self:OpenFile(self.root, self.directory) end 
 end
 
 function self:Init()

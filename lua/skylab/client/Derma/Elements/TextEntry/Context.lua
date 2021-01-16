@@ -244,6 +244,79 @@ function DataContext:ResetProfile()
     self:SetRulesProfile(table.Copy(self.configdefault))
 end
 
+function DataContext:GetIndexForKey(line) -- The Index is basically the "actual" line. 
+    if not line then return 0 end 
+    if line <= 0 or line > #self.context then return 0 end  
+    return self.context[line].index 
+end
+
+function DataContext:GetKeyForIndex(index)
+    if not index or index <= 0 then return 0, false end
+
+    local function recursiveSearch(collection)
+        for k, v in ipairs(collection) do 
+            if v.index == index then return true end 
+            if v.folding and v.folding.folds and #v.folding.folds > 0 then return recursiveSearch(v.folding.folds) end
+        end
+        return false 
+    end 
+
+    for k, v in ipairs(self.context) do 
+        if v.index == index then return k, false end 
+        if v.folding and v.folding.folds and #v.folding.folds > 0 then if recursiveSearch(v.folding.folds) == true then return k, true end end
+    end 
+
+    return 0, false
+end
+
+function DataContext:RevealLine(index)
+    if not index or index <= 0 then return end
+
+    local foldstack = {}
+
+    local function recursiveSearch(collection) 
+        for k, v in ipairs(collection) do 
+            if v.index == index then return true end 
+            if v.folding and #v.folding.folds > 0 then 
+                table.insert(foldstack, v.index)
+                if recursiveSearch(collection) == true then return true end
+                table.remove(foldstack)
+            end
+        end
+        return false 
+    end 
+
+    local function createFoldstack()
+        for k, v in ipairs(self.context) do 
+            if v.index == index then return end 
+            if v.folding and #v.folding.folds > 0 then 
+                foldstack = {}
+                table.insert(foldstack, v.index)
+                if recursiveSearch(v.folding.folds) == true then return end 
+            end
+        end
+    end
+    
+    createFoldstack()
+
+    while #foldstack > 0 do  
+        local item = foldstack[1]
+        for k, v in ipairs(self.context) do 
+            if v.index == item then 
+                for i, v2 in pairs(v.folding.folds) do 
+                    if v2.button then v2.button:SetVisible(false) end 
+                    table.insert(self.context, k + i, v2)
+                    self:LineUnfolded(k, #v.folding.folds, v)
+                end
+            end 
+        end
+        table.remove(foldstack, 1)
+    end
+    
+    self:GetGlobalFoldingAvailability()
+    self:FixIndeces()
+end
+
 -- This Function does the whole Lexing Process (Only 1 line at a time)
 function DataContext:ParseRow(text, prevTokens, extendExistingTokens)
     if not self.profile then return {} end 
@@ -974,8 +1047,10 @@ function DataContext:FixIndeces() -- Extremely important function to keep the li
     recursiveFix(self.context)
 end
 
-function DataContext:UnfoldLine(i)
+function DataContext:UnfoldLine(i, fix)
     if i == nil then return 0 end 
+
+    if fix == nil then fix = true end 
 
     if i < 1 or i > #self.context then return 0 end 
     local t = self.context[i]

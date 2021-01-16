@@ -15,7 +15,7 @@ if not SSLE then
 end 
 
 SSLE.launch = function()
-    SSLE.editor:Open("LUA", "vgui/")
+    SSLE.editor:Open("LUA", "vgui/contextbase.lua")
       --  SSLE:OpenBrowser(function()end)
 end
 

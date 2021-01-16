@@ -221,7 +221,7 @@ function self:Init()
                 return 
             end
         
-            local line = self:KeyForIndex(super.index)
+            local line = self.data:GetKeyForIndex(super.index)
 
             if not line then return end 
 
@@ -765,13 +765,13 @@ function self:_KeyCodePressed(code)
             local char, line = self:HopTextRight(self.caret.char, self.caret.actualLine)
             if char and line then 
                 self:ResetSelection()
-                self:SetCaret(char, self:IndexForKey(line))
+                self:SetCaret(char, self.data:GetIndexForKey(line))
             end
         elseif code == KEY_LEFT then 
             local char, line = self:HopTextLeft(self.caret.char, self.caret.actualLine)
             if char and line then 
                 self:ResetSelection()
-                self:SetCaret(char, self:IndexForKey(line))
+                self:SetCaret(char, self.data:GetIndexForKey(line))
             end
         elseif code == KEY_Z then 
             local char, line = self.data:Undo()
@@ -1284,17 +1284,6 @@ function self:pop(...) -- short for pos on panel. Converts a position in the tex
     return x, y 
 end
 
-function self:KeyForIndex(index)
-    for k, v in pairs(self.data.context) do 
-        if v.index ~= index then continue end 
-        return k 
-    end 
-end
-
-function self:IndexForKey(key)
-    return self.data.context[key].index 
-end
-
 function self:SetCaretFromVisLine(...)
     if #{...} < 2 then return end 
     
@@ -1304,7 +1293,7 @@ function self:SetCaretFromVisLine(...)
 
     if swapOnReach == nil then swapOnReach = false end 
 
-    return self:SetCaret(char, self:IndexForKey(line), swapOnReach)
+    return self:SetCaret(char, self.data:GetIndexForKey(line), swapOnReach)
 end
 
 function self:CaretSet(char, line, actualLine) end 
@@ -1318,7 +1307,7 @@ function self:SetCaret(...)
     if self.caret.char ~= char or self.caret.line ~= line then 
         if swapOnReach == nil then swapOnReach = false end 
 
-        local actualLine = self:KeyForIndex(line)
+        local actualLine = self.data:GetKeyForIndex(line)
 
         if not actualLine then 
             local last = self.caret.actualLine
