@@ -616,11 +616,9 @@ function self:_TextChanged()
 end
 
 function self:_KeyCodeReleased(code)
-
 end
 
 function self:OnKeyCombo(key1, key2)
-
 end
 
 function self:HopTextLeft(char, line)
@@ -925,6 +923,7 @@ function self:ProfileReset() end
 function self:ClearProfile()
     self.data:ResetProfile()
     self:ProfileReset()
+    self:ClearProfile()
 end
 
 function self:SetText(text)

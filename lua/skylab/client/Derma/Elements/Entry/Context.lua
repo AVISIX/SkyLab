@@ -36,6 +36,12 @@ local function lastRecursiveEntry(collection)
     return result, skips  
 end
 
+local function tokensSame(a, b)
+    if #a ~= #b then return false end 
+    for i = 1, #a, 1 do if a[i].text ~= b[i].text or a[i].type ~= b[i].type then return false end end
+    return true 
+end
+
 local DataContext = {}
 DataContext.__index = DataContext
 
@@ -527,7 +533,11 @@ function DataContext:GetTextArea(startChar, startLine, endChar, endLine)
     return result 
 end 
 
-function DataContext:InsertTextAt(text, char, line, do_undo) return self:_InsertTextAt(text, char, line, do_undo) end
+function DataContext:InsertTextAt(text, char, line, do_undo) 
+    self:ValidateFoldingAvailability(line)
+    self:ValidateFoldingAvailability(line - 1) 
+    return self:_InsertTextAt(text, char, line, do_undo) 
+end
 function DataContext:_InsertTextAt(text, char, line, do_undo)
     if not text or not char or not line then return end 
 
@@ -579,7 +589,12 @@ function DataContext:_InsertTextAt(text, char, line, do_undo)
     return #lines[#lines], (line + #lines - 1)
 end 
 
-function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine, do_undo) return self:_RemoveTextArea(startChar, startLine, endChar, endLine, do_undo) end
+function DataContext:RemoveTextArea(startChar, startLine, endChar, endLine, do_undo)
+    self:ValidateFoldingAvailability(startLine)
+    self:ValidateFoldingAvailability(startLine - 1) 
+    return self:_RemoveTextArea(startChar, startLine, endChar, endLine, do_undo) 
+end
+
 function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_undo)
     if not startChar and not startLine then return end 
 
@@ -661,8 +676,8 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_
 
     self:_OverrideLine(startLine, string.sub(sl, 1, startChar) ..string.sub(el, endChar + 1, #el))
 
-    for i = startLine, endLine - 1, 1 do 
-        table.remove(self.context, i + 1)
+    for i = startLine + 1, endLine, 1 do 
+        table.remove(self.context, i)
     end
 
     self:FixIndeces()
@@ -671,8 +686,6 @@ function DataContext:_RemoveTextArea(startChar, startLine, endChar, endLine, do_
 end
 
 function DataContext:AddText(text, char, line, do_undo)
-    self:ValidateFoldingAvailability(line)
-    self:ValidateFoldingAvailability(line - 1)
     return self:_InsertTextAt(text, char, line, do_undo)
 end
 
@@ -1261,12 +1274,6 @@ function DataContext:EntryForReal(line)
     end 
 
     return recursiveSearch(self.context)
-end
-
-local function tokensSame(a, b)
-    if #a ~= #b then return false end 
-    for i = 1, #a, 1 do if a[i].text ~= b[i].text or a[i].type ~= b[i].type then return false end end
-    return true 
 end
 
 -- Only use this function to do simple parsing for only the tokens.
