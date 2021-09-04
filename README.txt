@@ -1,19 +1,7 @@
-Skylab Lua Editor Ver 1.0
+My Unfinished GMod IDE, I have never really finsihed this as I actually grew out of the game and got busy with...well..life.
 
-Developers:
-	- Sixmax
-	- Evaneos[KOWAR]
+This code is VERY badly structured and I wouldnt suggest anyone to try and fix or continue it.
 
-Read license for more info.
+Though, if you want, feel free to reuse any of the code.
 
-Skylab Lua Editor is a dynamic ingame Lua Editor with beautiful Syntax Highlight and perfect ergonomic editing.
-
-Current features include:
-- Syntax Highlighting
-- Undo & Redo
-- Auto-Indenting
-- Auto-Pair completion
-- Pair detection
-- Multi-word highlighting
-- Find & Replace 
-- Lua Compilation
+I am putting this under public domain :)
